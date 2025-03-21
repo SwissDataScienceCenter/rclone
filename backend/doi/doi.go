@@ -88,22 +88,82 @@ func statusError(res *http.Response, err error) error {
 	return nil
 }
 
-// Resolve the passed configuration into an enpoint
-func resolveEndpoint(opt *Options) (endpoint *url.URL, err error) {
-	// TODO
-	testUrl, err := url.Parse("https://sandbox.zenodo.org/api/records/184536")
+type cslData struct {
+	URL string `json:"URL"`
+}
 
+// Resolve the passed configuration into an enpoint
+func resolveEndpoint(ctx context.Context, client *http.Client, opt *Options) (endpoint *url.URL, err error) {
+	// TODO: this assumes `opt.Doi` is a pure DOI
+	baseURL, err := url.Parse("https://dx.doi.org/")
 	if err != nil {
 		return nil, err
 	}
-	return testUrl, nil
+	doiURL, err := url.JoinPath(baseURL.String(), opt.Doi)
+	fs.Logf(nil, "DOI URL = %s", doiURL)
+	req, err := http.NewRequestWithContext(ctx, "GET", doiURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	// Manually ask for JSON
+	req.Header.Add("Accept", "application/vnd.citationstyles.csl+json")
+	res, err := client.Do(req)
+	if err == nil {
+		defer fs.CheckClose(res.Body, &err)
+		if res.StatusCode == http.StatusNotFound {
+			return nil, fs.ErrorDirNotFound
+		}
+	}
+	err = statusError(res, err)
+	if err != nil {
+		return nil, err
+	}
+
+	var zenodoURL *url.URL = nil
+
+	contentType := strings.SplitN(res.Header.Get("Content-Type"), ";", 2)[0]
+	switch contentType {
+	case "application/vnd.citationstyles.csl+json":
+		// TODO: split into a parse method?
+		record := new(cslData)
+		err = rest.DecodeJSON(res, &record)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read DOI: %w", err)
+		}
+		zenodoURL, err = url.Parse(record.URL)
+		if err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("can't parse content type %q", contentType)
+	}
+
+	fs.Logf(nil, "zenodoURL = %s", zenodoURL.String())
+
+	var parts []string
+	for _, part := range strings.Split(zenodoURL.String(), "/") {
+		if part != "" {
+			parts = append(parts, part)
+		}
+	}
+	recordID := parts[len(parts)-1]
+
+	// TODO: handle last version redirect
+
+	zenodoURL.Path = ""
+	zenodoApiURL, err := url.JoinPath(zenodoURL.String(), "/api", "records", recordID)
+	if err != nil {
+		return nil, err
+	}
+	fs.Logf(nil, "zenodoApiURL = %s", zenodoApiURL)
+	return url.Parse(zenodoApiURL)
 }
 
 // Make the http connection from the passed options
 func (f *Fs) httpConnection(ctx context.Context, opt *Options) (isFile bool, err error) {
 	client := fshttp.NewClient(ctx)
 
-	endpoint, err := resolveEndpoint(opt)
+	endpoint, err := resolveEndpoint(ctx, client, opt)
 	if err != nil {
 		return false, err
 	}
