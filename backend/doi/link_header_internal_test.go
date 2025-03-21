@@ -9,7 +9,7 @@ import (
 func TestParseLinkHeader(t *testing.T) {
 	header := "<https://zenodo.org/api/records/15063252> ; rel=\"linkset\" ; type=\"application/linkset+json\""
 	links := parseLinkHeader(header)
-	expected := Link{
+	expected := headerLink{
 		Href:   "https://zenodo.org/api/records/15063252",
 		Rel:    "linkset",
 		Type:   "application/linkset+json",
