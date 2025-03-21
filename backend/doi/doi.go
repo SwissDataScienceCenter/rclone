@@ -229,6 +229,8 @@ func (f *Fs) httpConnection(ctx context.Context, opt *Options) (isFile bool, err
 // NewFs creates a new Fs object from the name and root. It connects to
 // the host specified in the config file.
 func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, error) {
+	root = strings.Trim(root, "/")
+
 	// Parse config into Options struct
 	opt := new(Options)
 	err := configstruct.Set(m, opt)
