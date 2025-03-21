@@ -138,6 +138,11 @@ func resolveEndpoint(ctx context.Context, client *http.Client, opt *Options) (en
 		return nil, fmt.Errorf("can't parse content type %q", contentType)
 	}
 
+	hostname := strings.ToLower(zenodoURL.Hostname())
+	if hostname != "zenodo.org" || strings.HasSuffix(hostname, ".zenodo.org") {
+		return nil, fmt.Errorf("provider '%s' is not supported", zenodoURL.Hostname())
+	}
+
 	fs.Logf(nil, "zenodoURL = %s", zenodoURL.String())
 
 	req, err = http.NewRequestWithContext(ctx, "HEAD", zenodoURL.String(), nil)
