@@ -140,23 +140,31 @@ func resolveEndpoint(ctx context.Context, client *http.Client, opt *Options) (en
 
 	fs.Logf(nil, "zenodoURL = %s", zenodoURL.String())
 
-	var parts []string
-	for _, part := range strings.Split(zenodoURL.String(), "/") {
-		if part != "" {
-			parts = append(parts, part)
-		}
-	}
-	recordID := parts[len(parts)-1]
-
-	// TODO: handle last version redirect
-
-	zenodoURL.Path = ""
-	zenodoApiURL, err := url.JoinPath(zenodoURL.String(), "/api", "records", recordID)
+	req, err = http.NewRequestWithContext(ctx, "HEAD", zenodoURL.String(), nil)
 	if err != nil {
 		return nil, err
 	}
-	fs.Logf(nil, "zenodoApiURL = %s", zenodoApiURL)
-	return url.Parse(zenodoApiURL)
+	res, err = client.Do(req)
+	if err == nil {
+		defer fs.CheckClose(res.Body, &err)
+		if res.StatusCode == http.StatusNotFound {
+			return nil, fs.ErrorDirNotFound
+		}
+	}
+	err = statusError(res, err)
+	if err != nil {
+		return nil, err
+	}
+
+	links := parseLinkHeader(res.Header.Get("Link"))
+	linksetURL := ""
+	for _, link := range links {
+		if link.Rel == "linkset" {
+			linksetURL = link.Href
+		}
+	}
+	fs.Logf(nil, "linksetURL = %s", linksetURL)
+	return url.Parse(linksetURL)
 }
 
 // Make the http connection from the passed options

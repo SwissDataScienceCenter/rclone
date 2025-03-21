@@ -212,13 +212,15 @@ jobs:
           if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then make release_dep_linux ; fi
           make ci_gha
           ls -al build/
+        if: matrix.deploy
 
       - name: Update artifacts to GitHub
         uses: actions/upload-artifact@v4
         with:
           name: build-${{ matrix.job_name }}
           path: build
-          retention-days: 7
+          retention-days: 1
+        if: matrix.deploy
 
       # - name: Deploy built binaries
       #   shell: bash
