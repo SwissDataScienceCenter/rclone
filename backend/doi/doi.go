@@ -100,6 +100,9 @@ func resolveEndpoint(ctx context.Context, client *http.Client, opt *Options) (en
 		return nil, err
 	}
 	doiURL, err := url.JoinPath(baseURL.String(), opt.Doi)
+	if err != nil {
+		return nil, err
+	}
 	fs.Logf(nil, "DOI URL = %s", doiURL)
 	req, err := http.NewRequestWithContext(ctx, "GET", doiURL, nil)
 	if err != nil {
@@ -119,8 +122,7 @@ func resolveEndpoint(ctx context.Context, client *http.Client, opt *Options) (en
 		return nil, err
 	}
 
-	var zenodoURL *url.URL = nil
-
+	var zenodoURL *url.URL
 	contentType := strings.SplitN(res.Header.Get("Content-Type"), ";", 2)[0]
 	switch contentType {
 	case "application/vnd.citationstyles.csl+json":
@@ -357,7 +359,7 @@ type zenodoRecord struct {
 }
 
 type zenodoDatasetFile struct {
-	Id       string      `json:"id"`
+	ID       string      `json:"id"`
 	Key      string      `json:"key"`
 	Size     int64       `json:"size"`
 	Checksum string      `json:"checksum"`
@@ -486,11 +488,11 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 		return nil, fmt.Errorf("error listing %q: %w", dir, err)
 	}
 
-	entries_, err := f.listDoiFiles(ctx)
+	fileEntries, err := f.listDoiFiles(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error listing %q: %w", dir, err)
 	}
-	for _, entry := range entries_ {
+	for _, entry := range fileEntries {
 		entries = append(entries, entry)
 	}
 	fs.Logf(nil, "entries = %s", entries)

@@ -8,14 +8,16 @@ import (
 var linkRegex = regexp.MustCompile(`^<(.+)>$`)
 var valueRegex = regexp.MustCompile(`^"(.+)"$`)
 
-type Link struct {
+// headerLink represents a link as presented in HTTP headers
+// MDN Reference: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/headerLink
+type headerLink struct {
 	Href   string
 	Rel    string
 	Type   string
 	Extras map[string]string
 }
 
-func parseLinkHeader(header string) (links []Link) {
+func parseLinkHeader(header string) (links []headerLink) {
 	for _, link := range strings.Split(header, ",") {
 		link = strings.TrimSpace(link)
 		parsed := parseLink(link)
@@ -26,7 +28,7 @@ func parseLinkHeader(header string) (links []Link) {
 	return links
 }
 
-func parseLink(link string) (parsedLink *Link) {
+func parseLink(link string) (parsedLink *headerLink) {
 	var parts []string
 	for _, part := range strings.Split(link, ";") {
 		parts = append(parts, strings.TrimSpace(part))
@@ -37,7 +39,7 @@ func parseLink(link string) (parsedLink *Link) {
 		return nil
 	}
 
-	result := &Link{
+	result := &headerLink{
 		Href:   match[1],
 		Extras: map[string]string{},
 	}
