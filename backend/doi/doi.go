@@ -342,19 +342,19 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 	// return o, nil
 }
 
-// Adds the configured headers to the request if any
-func addHeaders(req *http.Request, opt *Options) {
-	// for i := 0; i < len(opt.Headers); i += 2 {
-	// 	key := opt.Headers[i]
-	// 	value := opt.Headers[i+1]
-	// 	req.Header.Add(key, value)
-	// }
-}
+// // Adds the configured headers to the request if any
+// func addHeaders(req *http.Request, opt *Options) {
+// 	// for i := 0; i < len(opt.Headers); i += 2 {
+// 	// 	key := opt.Headers[i]
+// 	// 	value := opt.Headers[i+1]
+// 	// 	req.Header.Add(key, value)
+// 	// }
+// }
 
-// Adds the configured headers to the request if any
-func (f *Fs) addHeaders(req *http.Request) {
-	addHeaders(req, &f.opt)
-}
+// // Adds the configured headers to the request if any
+// func (f *Fs) addHeaders(req *http.Request) {
+// 	addHeaders(req, &f.opt)
+// }
 
 type zenodoRecord struct {
 	Files []zenodoDatasetFile `json:"files"`
@@ -380,7 +380,7 @@ func (f *Fs) listDoiFiles(ctx context.Context) (entries []*Object, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("readDir failed: %w", err)
 	}
-	f.addHeaders(req)
+	// f.addHeaders(req)
 
 	// Manually ask for JSON
 	req.Header.Add("Accept", "application/json")
@@ -608,6 +608,8 @@ func (o *Object) Storable() bool {
 
 // Open a remote http file object for reading. Seek is supported
 func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.ReadCloser, err error) {
+	fs.FixRangeOption(options, o.size)
+
 	url := o.contentURL
 	fs.Logf(nil, "Open URL = %s", url)
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -617,9 +619,10 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 
 	// Add optional headers
 	for k, v := range fs.OpenOptionHeaders(options) {
+		fs.Logf(o, "header %s = %s", k, v)
 		req.Header.Add(k, v)
 	}
-	o.fs.addHeaders(req)
+	// o.fs.addHeaders(req)
 
 	// Do the request
 	res, err := o.fs.httpClient.Do(req)
