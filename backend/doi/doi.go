@@ -236,7 +236,24 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 // NewObject creates a new remote http file object
 func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 	fs.Logf(nil, "remote = %s", remote)
-	return nil, fmt.Errorf("TODO: implement NewObject")
+
+	// TODO: Can we avoid listing the files?
+	entries, err := f.listDoiFiles(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, entry := range entries {
+		if entry.Remote() == remote {
+			fs.Logf(nil, "Found: %s -> %s", entry.Remote(), entry.contentURL)
+			return entry, nil
+		}
+	}
+
+	return nil, fs.ErrorObjectNotFound
+
+	// return nil, fmt.Errorf("TODO: implement NewObject")
+
 	// o := &Object{
 	// 	fs:     f,
 	// 	remote: remote,
@@ -278,8 +295,8 @@ type zenodoLinks struct {
 	Self string `json:"self"`
 }
 
-// Read the directory passed in
-func (f *Fs) readDir(ctx context.Context, dir string) (entries fs.DirEntries, err error) {
+// List the files contained in the DOI
+func (f *Fs) listDoiFiles(ctx context.Context) (entries []*Object, err error) {
 	URL := f.endpointURL
 	// Do the request
 	req, err := http.NewRequestWithContext(ctx, "GET", URL, nil)
@@ -396,9 +413,12 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 		return nil, fmt.Errorf("error listing %q: %w", dir, err)
 	}
 
-	entries, err = f.readDir(ctx, dir)
+	entries_, err := f.listDoiFiles(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error listing %q: %w", dir, err)
+	}
+	for _, entry := range entries_ {
+		entries = append(entries, entry)
 	}
 	fs.Logf(nil, "entries = %s", entries)
 
