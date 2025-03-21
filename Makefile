@@ -238,6 +238,10 @@ ifeq ($(or $(BRANCH_PATH),$(RELEASE_TAG)),)
 endif
 	@echo Beta release ready at $(BETA_URL)
 
+ci_gha:
+	git log $(LAST_TAG).. > /tmp/git-log.txt
+	go run bin/cross-compile.go -release beta-latest -git-log /tmp/git-log.txt $(BUILD_FLAGS) $(BUILDTAGS) $(BUILD_ARGS) $(TAG)
+
 # Fetch the binary builds from GitHub actions
 fetch_binaries:
 	rclone -P sync --exclude "/testbuilds/**" --delete-excluded $(BETA_UPLOAD) build/
