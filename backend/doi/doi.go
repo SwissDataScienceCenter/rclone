@@ -229,6 +229,7 @@ func (f *Fs) httpConnection(ctx context.Context, opt *Options) (isFile bool, err
 // NewFs creates a new Fs object from the name and root. It connects to
 // the host specified in the config file.
 func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, error) {
+	fs.Logf(nil, "name = '%s', root = '%s'", name, root)
 	root = strings.Trim(root, "/")
 
 	// Parse config into Options struct
@@ -249,7 +250,7 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		CanHaveEmptyDirectories: true,
 	}).Fill(ctx, f)
 
-	fs.Logf(nil, "name = %s, root = %s", name, root)
+	fs.Logf(nil, "name = '%s', root = '%s'", name, root)
 
 	isFile, err := f.httpConnection(ctx, opt)
 	if err != nil {
