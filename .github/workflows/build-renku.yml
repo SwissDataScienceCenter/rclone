@@ -16,6 +16,10 @@ on:
         required: true
         default: true
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
 jobs:
   build:
     if: inputs.manual || (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name)
@@ -186,5 +190,50 @@ jobs:
           name: build-linux
           path: rclone
 
-      - name: Display structure of downloaded files
+      - name: List downloaded files
         run: ls -R rclone
+
+      - name: Extract rclone binary
+        run: |
+          unzip "rclone/*-amd64.zip" -d rclone-unzip
+          ls -R rclone-unzip
+          mv rclone-unzip/*/rclone rclone
+          ls .
+
+      - name: Docker image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: type=sha
+
+      - name: Extract Docker image name
+        id: docker_image
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          IMAGE=$(echo "$IMAGE_TAGS" | cut -d" " -f1)
+          IMAGE_REPOSITORY=$(echo "$IMAGE" | cut -d":" -f1)
+          IMAGE_TAG=$(echo "$IMAGE" | cut -d":" -f2)
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "image_repository=$IMAGE_REPOSITORY" >> "$GITHUB_OUTPUT"
+          echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Docker buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Set up Docker
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: .renku/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
