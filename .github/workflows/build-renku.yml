@@ -1,0 +1,169 @@
+name: Build rclone for Renku
+
+# Trigger the workflow on push or pull request
+on:
+  push:
+    branches:
+      - '**'
+    tags:
+      - '**'
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      manual:
+        description: Manual run (bypass default conditions)
+        type: boolean
+        required: true
+        default: true
+
+jobs:
+  build:
+    if: inputs.manual || (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name)
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        job_name: ['linux']
+
+        include:
+          - job_name: linux
+            os: ubuntu-latest
+            go: '1.21'
+            gotags: cmount
+            build_flags: '-include "linux/amd64|linux/arm64"'
+            deploy: true
+
+    name: ${{ matrix.job_name }}
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          check-latest: true
+
+      - name: Set environment variables
+        shell: bash
+        run: |
+          echo 'GOTAGS=${{ matrix.gotags }}' >> $GITHUB_ENV
+          echo 'BUILD_FLAGS=${{ matrix.build_flags }}' >> $GITHUB_ENV
+          echo 'BUILD_ARGS=${{ matrix.build_args }}' >> $GITHUB_ENV
+          if [[ "${{ matrix.goarch }}" != "" ]]; then echo 'GOARCH=${{ matrix.goarch }}' >> $GITHUB_ENV ; fi
+          if [[ "${{ matrix.cgo }}" != "" ]]; then echo 'CGO_ENABLED=${{ matrix.cgo }}' >> $GITHUB_ENV ; fi
+
+      - name: Install Libraries on Linux
+        shell: bash
+        run: |
+          sudo modprobe fuse
+          sudo chmod 666 /dev/fuse
+          sudo chown root:$USER /etc/fuse.conf
+          sudo apt-get install fuse3 libfuse-dev rpm pkg-config
+        if: matrix.os == 'ubuntu-latest'
+
+      - name: Install Libraries on macOS
+        shell: bash
+        run: |
+          # https://github.com/Homebrew/brew/issues/15621#issuecomment-1619266788
+          # https://github.com/orgs/Homebrew/discussions/4612#discussioncomment-6319008
+          unset HOMEBREW_NO_INSTALL_FROM_API
+          brew untap --force homebrew/core
+          brew untap --force homebrew/cask
+          brew update
+          brew install --cask macfuse
+        if: matrix.os == 'macos-11'
+
+      - name: Install Libraries on Windows
+        shell: powershell
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          choco install -y winfsp zip
+          echo "CPATH=C:\Program Files\WinFsp\inc\fuse;C:\Program Files (x86)\WinFsp\inc\fuse" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if ($env:GOARCH -eq "386") {
+            choco install -y mingw --forcex86 --force
+            echo "C:\\ProgramData\\chocolatey\\lib\\mingw\\tools\\install\\mingw32\\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+          # Copy mingw32-make.exe to make.exe so the same command line
+          # can be used on Windows as on macOS and Linux
+          $path = (get-command mingw32-make.exe).Path
+          Copy-Item -Path $path -Destination (Join-Path (Split-Path -Path $path) 'make.exe')
+        if: matrix.os == 'windows-latest'
+
+      - name: Print Go version and environment
+        shell: bash
+        run: |
+          printf "Using go at: $(which go)\n"
+          printf "Go version: $(go version)\n"
+          printf "\n\nGo environment:\n\n"
+          go env
+          printf "\n\nRclone environment:\n\n"
+          make vars
+          printf "\n\nSystem environment:\n\n"
+          env
+
+      - name: Go module cache
+        uses: actions/cache@v4
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Build rclone
+        shell: bash
+        run: |
+          make
+
+      - name: Rclone version
+        shell: bash
+        run: |
+          rclone version
+
+      - name: Run tests
+        shell: bash
+        run: |
+          make quicktest
+        if: matrix.quicktest
+
+      - name: Race test
+        shell: bash
+        run: |
+          make racequicktest
+        if: matrix.racequicktest
+
+      - name: Run librclone tests
+        shell: bash
+        run: |
+          make -C librclone/ctest test
+          make -C librclone/ctest clean
+          librclone/python/test_rclone.py
+        if: matrix.librclonetest
+
+      - name: Compile all architectures test
+        shell: bash
+        run: |
+          make
+          make compile_all
+        if: matrix.compile_all
+
+      - name: Build binaries for release
+        shell: bash
+        run: |
+          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then make release_dep_linux ; fi
+          make ci_gha
+          ls -al build/
+        if: matrix.deploy
+
+      - name: Upload artifacts to GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ matrix.job_name }}
+          path: build
+          retention-days: 1
+        if: matrix.deploy
