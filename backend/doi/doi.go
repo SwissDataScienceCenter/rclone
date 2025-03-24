@@ -49,6 +49,13 @@ func init() {
 	fs.Register(fsi)
 }
 
+type Provider string
+
+var (
+	Zenodo    Provider = "zenodo"
+	Dataverse Provider = "dataverse"
+)
+
 // Options defines the configuration for this backend
 type Options struct {
 	Doi      string `config:"doi"`
@@ -59,6 +66,7 @@ type Options struct {
 type Fs struct {
 	name        string
 	root        string
+	provider    Provider
 	features    *fs.Features   // optional features
 	opt         Options        // options for this backend
 	ci          *fs.ConfigInfo // global config
@@ -94,21 +102,21 @@ type cslData struct {
 	URL string `json:"URL"`
 }
 
-// Resolve the passed configuration into an enpoint
-func resolveEndpoint(ctx context.Context, client *http.Client, opt *Options) (endpoint *url.URL, err error) {
+// Resolve the passed configuration into a provider and enpoint
+func resolveEndpoint(ctx context.Context, client *http.Client, opt *Options) (provider Provider, endpoint *url.URL, err error) {
 	// TODO: this assumes `opt.Doi` is a pure DOI
 	baseURL, err := url.Parse("https://dx.doi.org/")
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	doiURL, err := url.JoinPath(baseURL.String(), opt.Doi)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	fs.Logf(nil, "DOI URL = %s", doiURL)
 	req, err := http.NewRequestWithContext(ctx, "GET", doiURL, nil)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	// Manually ask for JSON
 	req.Header.Add("Accept", "application/vnd.citationstyles.csl+json")
@@ -116,15 +124,15 @@ func resolveEndpoint(ctx context.Context, client *http.Client, opt *Options) (en
 	if err == nil {
 		defer fs.CheckClose(res.Body, &err)
 		if res.StatusCode == http.StatusNotFound {
-			return nil, fs.ErrorDirNotFound
+			return "", nil, fs.ErrorDirNotFound
 		}
 	}
 	err = statusError(res, err)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 
-	var zenodoURL *url.URL
+	var resolvedURL *url.URL
 	contentType := strings.SplitN(res.Header.Get("Content-Type"), ";", 2)[0]
 	switch contentType {
 	case "application/vnd.citationstyles.csl+json":
@@ -132,37 +140,42 @@ func resolveEndpoint(ctx context.Context, client *http.Client, opt *Options) (en
 		record := new(cslData)
 		err = rest.DecodeJSON(res, &record)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read DOI: %w", err)
+			return "", nil, fmt.Errorf("failed to read DOI: %w", err)
 		}
-		zenodoURL, err = url.Parse(record.URL)
+		resolvedURL, err = url.Parse(record.URL)
 		if err != nil {
-			return nil, err
+			return "", nil, err
 		}
 	default:
-		return nil, fmt.Errorf("can't parse content type %q", contentType)
+		return "", nil, fmt.Errorf("can't parse content type %q", contentType)
 	}
 
-	hostname := strings.ToLower(zenodoURL.Hostname())
+	hostname := strings.ToLower(resolvedURL.Hostname())
+
+	if hostname == "dataverse.harvard.edu" {
+		return resolveDataverseEndpoint(resolvedURL)
+	}
+
 	if hostname != "zenodo.org" || strings.HasSuffix(hostname, ".zenodo.org") {
-		return nil, fmt.Errorf("provider '%s' is not supported", zenodoURL.Hostname())
+		return "", nil, fmt.Errorf("provider '%s' is not supported", resolvedURL.Hostname())
 	}
 
-	fs.Logf(nil, "zenodoURL = %s", zenodoURL.String())
+	fs.Logf(nil, "zenodoURL = %s", resolvedURL.String())
 
-	req, err = http.NewRequestWithContext(ctx, "HEAD", zenodoURL.String(), nil)
+	req, err = http.NewRequestWithContext(ctx, "HEAD", resolvedURL.String(), nil)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	res, err = client.Do(req)
 	if err == nil {
 		defer fs.CheckClose(res.Body, &err)
 		if res.StatusCode == http.StatusNotFound {
-			return nil, fs.ErrorDirNotFound
+			return "", nil, fs.ErrorDirNotFound
 		}
 	}
 	err = statusError(res, err)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 
 	links := parseLinkHeader(res.Header.Get("Link"))
@@ -173,14 +186,15 @@ func resolveEndpoint(ctx context.Context, client *http.Client, opt *Options) (en
 		}
 	}
 	fs.Logf(nil, "linksetURL = %s", linksetURL)
-	return url.Parse(linksetURL)
+	endpoint, err = url.Parse(linksetURL)
+	return Zenodo, endpoint, err
 }
 
 // Make the http connection from the passed options
 func (f *Fs) httpConnection(ctx context.Context, opt *Options) (isFile bool, err error) {
 	client := fshttp.NewClient(ctx)
 
-	endpoint, err := resolveEndpoint(ctx, client, opt)
+	provider, endpoint, err := resolveEndpoint(ctx, client, opt)
 	if err != nil {
 		return false, err
 	}
@@ -192,6 +206,7 @@ func (f *Fs) httpConnection(ctx context.Context, opt *Options) (isFile bool, err
 	f.httpClient = client
 	f.endpoint = endpoint
 	f.endpointURL = endpoint.String()
+	f.provider = provider
 	return isFile, nil
 }
 
@@ -379,9 +394,14 @@ func (f *Fs) listDoiFiles(ctx context.Context) (entries []*Object, err error) {
 // This should return ErrDirNotFound if the directory isn't
 // found.
 func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err error) {
+	if f.provider == Dataverse {
+		return f.listDataverse(ctx, dir)
+	}
+
 	if dir != "" {
-		err := fmt.Errorf("doi remote does not support subfolders")
-		return nil, fmt.Errorf("error listing %q: %w", dir, err)
+		// err := fmt.Errorf("doi remote does not support subfolders")
+		// return nil, fmt.Errorf("error listing %q: %w", dir, err)
+		return nil, fs.ErrorDirNotFound
 	}
 
 	fileEntries, err := f.listDoiFiles(ctx)
