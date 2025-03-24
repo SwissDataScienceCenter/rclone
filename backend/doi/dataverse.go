@@ -85,7 +85,9 @@ func (f *Fs) listDataverseDoiFiles(ctx context.Context) (entries []*Object, err 
 		}
 		for _, file := range record.Data.LatestVersion.Files {
 			path := fmt.Sprintf("/api/access/datafile/%d", file.DataFile.ID)
-			contentURL := f.endpoint.ResolveReference(&url.URL{Path: path})
+			query := url.Values{}
+			query.Add("format", "original")
+			contentURL := f.endpoint.ResolveReference(&url.URL{Path: path, RawQuery: query.Encode()})
 			entry := &Object{
 				fs:          f,
 				name:        file.DataFile.Filename,
