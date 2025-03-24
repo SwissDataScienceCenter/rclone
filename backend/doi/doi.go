@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rclone/rclone/fs"
@@ -74,6 +75,7 @@ type Object struct {
 	size        int64
 	modTime     time.Time
 	contentType string
+	md5         string
 }
 
 // statusError returns an error if the response contained an error
@@ -191,39 +193,6 @@ func (f *Fs) httpConnection(ctx context.Context, opt *Options) (isFile bool, err
 	f.endpoint = endpoint
 	f.endpointURL = endpoint.String()
 	return isFile, nil
-
-	// if len(opt.Headers)%2 != 0 {
-	// 	return false, errors.New("odd number of headers supplied")
-	// }
-
-	// if !strings.HasSuffix(opt.Endpoint, "/") {
-	// 	opt.Endpoint += "/"
-	// }
-
-	// // Parse the endpoint and stick the root onto it
-	// base, err := url.Parse(opt.Endpoint)
-	// if err != nil {
-	// 	return false, err
-	// }
-	// u, err := rest.URLJoin(base, rest.URLPathEscape(f.root))
-	// if err != nil {
-	// 	return false, err
-	// }
-
-	// client := fshttp.NewClient(ctx)
-
-	// endpoint, isFile := getFsEndpoint(ctx, client, u.String(), opt)
-	// fs.Debugf(nil, "Root: %s", endpoint)
-	// u, err = url.Parse(endpoint)
-	// if err != nil {
-	// 	return false, err
-	// }
-
-	// // Update f with the new parameters
-	// f.httpClient = client
-	// f.endpoint = u
-	// f.endpointURL = u.String()
-	// return isFile, nil
 }
 
 // NewFs creates a new Fs object from the name and root. It connects to
@@ -293,7 +262,8 @@ func (f *Fs) Precision() time.Duration {
 
 // Hashes returns hash.HashNone to indicate remote hashing is unavailable
 func (f *Fs) Hashes() hash.Set {
-	return hash.Set(hash.None)
+	return hash.Set(hash.MD5)
+	// return hash.Set(hash.None)
 }
 
 // Mkdir makes the root directory of the Fs object
@@ -329,33 +299,7 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 	}
 
 	return nil, fs.ErrorObjectNotFound
-
-	// return nil, fmt.Errorf("TODO: implement NewObject")
-
-	// o := &Object{
-	// 	fs:     f,
-	// 	remote: remote,
-	// }
-	// err := o.head(ctx)
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// return o, nil
 }
-
-// // Adds the configured headers to the request if any
-// func addHeaders(req *http.Request, opt *Options) {
-// 	// for i := 0; i < len(opt.Headers); i += 2 {
-// 	// 	key := opt.Headers[i]
-// 	// 	value := opt.Headers[i+1]
-// 	// 	req.Header.Add(key, value)
-// 	// }
-// }
-
-// // Adds the configured headers to the request if any
-// func (f *Fs) addHeaders(req *http.Request) {
-// 	addHeaders(req, &f.opt)
-// }
 
 type zenodoRecord struct {
 	Files []zenodoDatasetFile `json:"files"`
@@ -381,7 +325,6 @@ func (f *Fs) listDoiFiles(ctx context.Context) (entries []*Object, err error) {
 	if err != nil {
 		return nil, fmt.Errorf("readDir failed: %w", err)
 	}
-	// f.addHeaders(req)
 
 	// Manually ask for JSON
 	req.Header.Add("Accept", "application/json")
@@ -409,12 +352,12 @@ func (f *Fs) listDoiFiles(ctx context.Context) (entries []*Object, err error) {
 		}
 		for _, file := range record.Files {
 			entry := &Object{
-				fs:          f,
-				name:        file.Key,
-				contentURL:  file.Links.Self,
-				size:        file.Size,
-				modTime:     timeUnset,
-				contentType: "application/octet-stream", // TODO
+				fs:         f,
+				name:       file.Key,
+				contentURL: file.Links.Self,
+				size:       file.Size,
+				modTime:    timeUnset,
+				md5:        strings.TrimLeft(file.Checksum, "md5:"),
 			}
 			entries = append(entries, entry)
 
@@ -424,56 +367,6 @@ func (f *Fs) listDoiFiles(ctx context.Context) (entries []*Object, err error) {
 	}
 
 	return entries, nil
-
-	// contentType := strings.SplitN(res.Header.Get("Content-Type"), ";", 2)[0]
-	// switch contentType {
-	// case "text/html":
-	// 	names, err = parse(u, res.Body)
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("readDir: %w", err)
-	// 	}
-	// default:
-	// 	return nil, fmt.Errorf("can't parse content type %q", contentType)
-	// }
-	// return names, nil
-
-	// URL := f.url(dir)
-	// u, err := url.Parse(URL)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("failed to readDir: %w", err)
-	// }
-	// if !strings.HasSuffix(URL, "/") {
-	// 	return nil, fmt.Errorf("internal error: readDir URL %q didn't end in /", URL)
-	// }
-	// // Do the request
-	// req, err := http.NewRequestWithContext(ctx, "GET", URL, nil)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("readDir failed: %w", err)
-	// }
-	// f.addHeaders(req)
-	// res, err := f.httpClient.Do(req)
-	// if err == nil {
-	// 	defer fs.CheckClose(res.Body, &err)
-	// 	if res.StatusCode == http.StatusNotFound {
-	// 		return nil, fs.ErrorDirNotFound
-	// 	}
-	// }
-	// err = statusError(res, err)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("failed to readDir: %w", err)
-	// }
-
-	// contentType := strings.SplitN(res.Header.Get("Content-Type"), ";", 2)[0]
-	// switch contentType {
-	// case "text/html":
-	// 	names, err = parse(u, res.Body)
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("readDir: %w", err)
-	// 	}
-	// default:
-	// 	return nil, fmt.Errorf("can't parse content type %q", contentType)
-	// }
-	// return names, nil
 }
 
 // List the objects and directories in dir into entries.  The
@@ -495,61 +388,41 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 	if err != nil {
 		return nil, fmt.Errorf("error listing %q: %w", dir, err)
 	}
+
+	var (
+		entriesMu sync.Mutex // to protect entries
+		wg        sync.WaitGroup
+		checkers  = f.ci.Checkers
+		in        = make(chan int, checkers)
+	)
+	update := func(idx int, fileEntry *Object) {
+		entriesMu.Lock()
+		fileEntries[idx] = fileEntry
+		entriesMu.Unlock()
+	}
+	for i := 0; i < checkers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for idx := range in {
+				file := fileEntries[idx]
+				err := file.head(ctx)
+				if err != nil {
+					fs.Debugf(file, "skipping because of error: %v", err)
+				}
+				update(idx, file)
+			}
+		}()
+	}
+	for idx := range fileEntries {
+		in <- idx
+	}
+	close(in)
+	wg.Wait()
 	for _, entry := range fileEntries {
 		entries = append(entries, entry)
 	}
-	fs.Logf(nil, "entries = %s", entries)
-
-	// TODO: get modTime and contentType for each entry (see below)
 	return entries, nil
-
-	// var (
-	// 	entriesMu sync.Mutex // to protect entries
-	// 	wg        sync.WaitGroup
-	// 	checkers  = f.ci.Checkers
-	// 	in        = make(chan string, checkers)
-	// )
-	// add := func(entry fs.DirEntry) {
-	// 	entriesMu.Lock()
-	// 	entries = append(entries, entry)
-	// 	entriesMu.Unlock()
-	// }
-	// for i := 0; i < checkers; i++ {
-	// 	wg.Add(1)
-	// 	go func() {
-	// 		defer wg.Done()
-	// 		for remote := range in {
-	// 			file := &Object{
-	// 				fs:     f,
-	// 				remote: remote,
-	// 			}
-	// 			switch err := file.head(ctx); err {
-	// 			case nil:
-	// 				add(file)
-	// 			case fs.ErrorNotAFile:
-	// 				// ...found a directory not a file
-	// 				add(fs.NewDir(remote, time.Time{}))
-	// 			default:
-	// 				fs.Debugf(remote, "skipping because of error: %v", err)
-	// 			}
-	// 		}
-	// 	}()
-	// }
-	// for _, name := range names {
-	// 	isDir := name[len(name)-1] == '/'
-	// 	name = strings.TrimRight(name, "/")
-	// 	remote := path.Join(dir, name)
-	// 	if isDir {
-	// 		add(fs.NewDir(remote, time.Time{}))
-	// 	} else {
-	// 		in <- remote
-	// 	}
-	// }
-	// close(in)
-	// wg.Wait()
-	// return entries, nil
-
-	// return nil, fmt.Errorf("TODO: implement List()")
 }
 
 // Put in to the remote path with the modTime given of the given size
@@ -558,6 +431,11 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 // will return the object and the error, otherwise will return
 // nil and the error
 func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.Object, error) {
+	return nil, errorReadOnly
+}
+
+// PutStream uploads to the remote path with the modTime given of indeterminate size
+func (f *Fs) PutStream(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.Object, error) {
 	return nil, errorReadOnly
 }
 
@@ -580,9 +458,11 @@ func (o *Object) Remote() string {
 }
 
 // Hash returns "" since HTTP (in Go or OpenSSH) doesn't support remote calculation of hashes
-func (o *Object) Hash(ctx context.Context, r hash.Type) (string, error) {
-	// TODO: it seems md5 checksums are returned, so we can support them
-	return "", hash.ErrUnsupported
+func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
+	if t != hash.MD5 {
+		return "", hash.ErrUnsupported
+	}
+	return o.md5, nil
 }
 
 // Size returns the size in bytes of the remote http file
@@ -631,7 +511,7 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 	if err != nil {
 		return nil, fmt.Errorf("Open failed: %w", err)
 	}
-	if err = o.decodeMetadata(ctx, res); err != nil {
+	if err = o.decodeMetadata(res); err != nil {
 		return nil, fmt.Errorf("decodeMetadata failed: %w", err)
 	}
 	return res.Body, nil
@@ -647,33 +527,27 @@ func (o *Object) MimeType(ctx context.Context) string {
 	return o.contentType
 }
 
-// // head sends a HEAD request to update info fields in the Object
-// func (o *Object) head(ctx context.Context) error {
-// 	if o.fs.opt.NoHead {
-// 		o.size = -1
-// 		o.modTime = timeUnset
-// 		o.contentType = fs.MimeType(ctx, o)
-// 		return nil
-// 	}
-// 	url := o.url()
-// 	req, err := http.NewRequestWithContext(ctx, "HEAD", url, nil)
-// 	if err != nil {
-// 		return fmt.Errorf("stat failed: %w", err)
-// 	}
-// 	o.fs.addHeaders(req)
-// 	res, err := o.fs.httpClient.Do(req)
-// 	if err == nil && res.StatusCode == http.StatusNotFound {
-// 		return fs.ErrorObjectNotFound
-// 	}
-// 	err = statusError(res, err)
-// 	if err != nil {
-// 		return fmt.Errorf("failed to stat: %w", err)
-// 	}
-// 	return o.decodeMetadata(ctx, res)
-// }
+// head sends a HEAD request to update info fields in the Object
+func (o *Object) head(ctx context.Context) error {
+	url := o.contentURL
+	fs.Logf(nil, "HEAD URL = %s", url)
+	req, err := http.NewRequestWithContext(ctx, "HEAD", url, nil)
+	if err != nil {
+		return fmt.Errorf("stat failed: %w", err)
+	}
+	res, err := o.fs.httpClient.Do(req)
+	if err == nil && res.StatusCode == http.StatusNotFound {
+		return fs.ErrorObjectNotFound
+	}
+	err = statusError(res, err)
+	if err != nil {
+		return fmt.Errorf("failed to stat: %w", err)
+	}
+	return o.decodeMetadata(res)
+}
 
 // decodeMetadata updates info fields in the Object according to HTTP response headers
-func (o *Object) decodeMetadata(ctx context.Context, res *http.Response) error {
+func (o *Object) decodeMetadata(res *http.Response) error {
 	t, err := http.ParseTime(res.Header.Get("Last-Modified"))
 	if err != nil {
 		t = timeUnset
@@ -681,25 +555,14 @@ func (o *Object) decodeMetadata(ctx context.Context, res *http.Response) error {
 	o.modTime = t
 	o.contentType = res.Header.Get("Content-Type")
 	o.size = rest.ParseSizeFromHeaders(res.Header)
-
-	// // If NoSlash is set then check ContentType to see if it is a directory
-	// if o.fs.opt.NoSlash {
-	// 	mediaType, _, err := mime.ParseMediaType(o.contentType)
-	// 	if err != nil {
-	// 		return fmt.Errorf("failed to parse Content-Type: %q: %w", o.contentType, err)
-	// 	}
-	// 	if mediaType == "text/html" {
-	// 		return fs.ErrorNotAFile
-	// 	}
-	// }
 	return nil
 }
 
 // Check the interfaces are satisfied
 var (
-	_ fs.Fs = &Fs{}
-	// _ fs.PutStreamer = &Fs{}
-	_ fs.Object    = &Object{}
-	_ fs.MimeTyper = &Object{}
+	_ fs.Fs          = &Fs{}
+	_ fs.PutStreamer = &Fs{}
+	_ fs.Object      = &Object{}
+	_ fs.MimeTyper   = &Object{}
 	// _ fs.Commander   = &Fs{}
 )
