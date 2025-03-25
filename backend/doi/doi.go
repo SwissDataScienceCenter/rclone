@@ -21,6 +21,10 @@ import (
 	"github.com/rclone/rclone/lib/rest"
 )
 
+// the URL of the DOI resolver
+// Reference: https://www.doi.org/the-identifier/resources/factsheets/doi-resolution-documentation
+const doiResolverApiURL = "https://doi.org/api"
+
 var (
 	errorReadOnly = errors.New("doi remotes are read only")
 	timeUnset     = time.Unix(0, 0)
@@ -64,26 +68,29 @@ type Options struct {
 
 // Fs stores the interface to the remote HTTP files
 type Fs struct {
-	name        string
-	root        string
-	provider    Provider
+	name        string         // name of this remote
+	root        string         // the path we are working on
+	provider    Provider       // the DOI provider
 	features    *fs.Features   // optional features
 	opt         Options        // options for this backend
 	ci          *fs.ConfigInfo // global config
-	endpoint    *url.URL
-	endpointURL string // endpoint as a string
-	httpClient  *http.Client
+	endpoint    *url.URL       // the main API endpoint for this remote
+	endpointURL string         // endpoint as a string
+	// TODO: replace `httpClient *http.Client` with `srv *rest.Client` (and a pacer?)
+	httpClient *http.Client // the http client
+	// TODO: use a cache (from lib/cache) to keep the dataset files listing
 }
 
 // Object is a remote object that has been stat'd (so it exists, but is not necessarily open for reading)
 type Object struct {
-	fs          *Fs
-	name        string
-	contentURL  string
-	size        int64
-	modTime     time.Time
-	contentType string
-	md5         string
+	fs   *Fs    // what this object is part of
+	name string // the name of the file
+	// TODO: use `remote` field?
+	contentURL  string    // the URL where the contents of the file can be downloaded
+	size        int64     // size of the object
+	modTime     time.Time // modification time of the object
+	contentType string    // content type of the object
+	md5         string    // MD5 hash of the object content
 }
 
 // statusError returns an error if the response contained an error
@@ -98,56 +105,68 @@ func statusError(res *http.Response, err error) error {
 	return nil
 }
 
-type cslData struct {
-	URL string `json:"URL"`
+type doiResolverResponse struct {
+	ResponseCode int                        `json:"responseCode"`
+	Handle       string                     `json:"handle"`
+	Values       []doiResolverResponseValue `json:"values"`
+}
+
+type doiResolverResponseValue struct {
+	Index     int                          `json:"index"`
+	Type      string                       `json:"type"`
+	Data      doiResolverResponseValueData `json:"data"`
+	Ttl       int                          `json:"ttl"`
+	Timestamp string                       `json:"timestamp"`
+}
+
+type doiResolverResponseValueData struct {
+	Format string `json:"format"`
+	Value  any    `json:"value"`
+}
+
+// Resolve a DOI to a URL
+// Reference: https://www.doi.org/the-identifier/resources/factsheets/doi-resolution-documentation
+func resolveDoiURL(ctx context.Context, client *http.Client, opt *Options) (doiURL *url.URL, err error) {
+	// TODO: this assumes `opt.Doi` is a pure DOI
+	doiRestClient := rest.NewClient(client).SetRoot(doiResolverApiURL)
+	params := url.Values{}
+	params.Add("index", "1")
+	opts := rest.Opts{
+		Method:     "GET",
+		Path:       "/handles/" + opt.Doi,
+		Parameters: params,
+	}
+	var result doiResolverResponse
+	_, err = doiRestClient.CallJSON(ctx, &opts, nil, &result)
+	if err != nil {
+		return nil, err
+	}
+
+	if result.ResponseCode != 1 {
+		return nil, fmt.Errorf("could not resolve DOI (error code %d)", result.ResponseCode)
+	}
+	resolvedURLStr := ""
+	for _, value := range result.Values {
+		if value.Type == "URL" && value.Data.Format == "string" {
+			valueStr, ok := value.Data.Value.(string)
+			if !ok {
+				return nil, fmt.Errorf("could not resolve DOI (incorrect response format)")
+			}
+			resolvedURLStr = valueStr
+		}
+	}
+	resolvedURL, err := url.Parse(resolvedURLStr)
+	if err != nil {
+		return nil, err
+	}
+	return resolvedURL, nil
 }
 
 // Resolve the passed configuration into a provider and enpoint
 func resolveEndpoint(ctx context.Context, client *http.Client, opt *Options) (provider Provider, endpoint *url.URL, err error) {
-	// TODO: this assumes `opt.Doi` is a pure DOI
-	baseURL, err := url.Parse("https://dx.doi.org/")
+	resolvedURL, err := resolveDoiURL(ctx, client, opt)
 	if err != nil {
 		return "", nil, err
-	}
-	doiURL, err := url.JoinPath(baseURL.String(), opt.Doi)
-	if err != nil {
-		return "", nil, err
-	}
-	fs.Logf(nil, "DOI URL = %s", doiURL)
-	req, err := http.NewRequestWithContext(ctx, "GET", doiURL, nil)
-	if err != nil {
-		return "", nil, err
-	}
-	// Manually ask for JSON
-	req.Header.Add("Accept", "application/vnd.citationstyles.csl+json")
-	res, err := client.Do(req)
-	if err == nil {
-		defer fs.CheckClose(res.Body, &err)
-		if res.StatusCode == http.StatusNotFound {
-			return "", nil, fs.ErrorDirNotFound
-		}
-	}
-	err = statusError(res, err)
-	if err != nil {
-		return "", nil, err
-	}
-
-	var resolvedURL *url.URL
-	contentType := strings.SplitN(res.Header.Get("Content-Type"), ";", 2)[0]
-	switch contentType {
-	case "application/vnd.citationstyles.csl+json":
-		// TODO: split into a parse method?
-		record := new(cslData)
-		err = rest.DecodeJSON(res, &record)
-		if err != nil {
-			return "", nil, fmt.Errorf("failed to read DOI: %w", err)
-		}
-		resolvedURL, err = url.Parse(record.URL)
-		if err != nil {
-			return "", nil, err
-		}
-	default:
-		return "", nil, fmt.Errorf("can't parse content type %q", contentType)
 	}
 
 	hostname := strings.ToLower(resolvedURL.Hostname())
@@ -162,11 +181,11 @@ func resolveEndpoint(ctx context.Context, client *http.Client, opt *Options) (pr
 
 	fs.Logf(nil, "zenodoURL = %s", resolvedURL.String())
 
-	req, err = http.NewRequestWithContext(ctx, "HEAD", resolvedURL.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, "HEAD", resolvedURL.String(), nil)
 	if err != nil {
 		return "", nil, err
 	}
-	res, err = client.Do(req)
+	res, err := client.Do(req)
 	if err == nil {
 		defer fs.CheckClose(res.Body, &err)
 		if res.StatusCode == http.StatusNotFound {
