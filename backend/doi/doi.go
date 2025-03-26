@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -214,7 +215,7 @@ func (f *Fs) httpConnection(ctx context.Context, opt *Options) (isFile bool, err
 	}
 
 	// Note that we assume that there are no subfolders for DOI objects
-	isFile = f.root != ""
+	// isFile = f.root != ""
 
 	// Update f with the new parameters
 	f.srv = rest.NewClient(client).SetRoot(endpoint.ResolveReference(&url.URL{Path: "/"}).String())
@@ -223,6 +224,24 @@ func (f *Fs) httpConnection(ctx context.Context, opt *Options) (isFile bool, err
 	f.endpointURL = endpoint.String()
 	f.doi = parseDoi(opt.Doi) // TODO: avoid calling parseDoi() again here
 	f.provider = provider
+
+	// Determine if the root is a file
+	switch f.provider {
+	case Dataverse:
+		entries, err := f.listDataverseDoiFiles(ctx)
+		if err != nil {
+			return false, err
+		}
+		for _, entry := range entries {
+			if entry.remote == f.root {
+				isFile = true
+				break
+			}
+		}
+	case Zenodo:
+		isFile = f.root != ""
+	}
+
 	return isFile, nil
 }
 
@@ -259,7 +278,12 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 
 	if isFile {
 		// return an error with an fs which points to the parent
-		f.root = ""
+		// f.root = ""
+		newRoot := path.Dir(f.root)
+		if newRoot == "." {
+			newRoot = ""
+		}
+		f.root = newRoot
 		return f, fs.ErrorIsFile
 	}
 
