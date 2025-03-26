@@ -311,8 +311,16 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 	fs.Logf(nil, "remote = %s", remote)
 
 	// TODO: Can we avoid listing the files?
-	// TODO: fix for dataverse
-	entries, err := f.listZenodoDoiFiles(ctx)
+	var entries []*Object
+	var err error
+	switch f.provider {
+	case Dataverse:
+		entries, err = f.listDataverseDoiFiles(ctx)
+	case Zenodo:
+		entries, err = f.listZenodoDoiFiles(ctx)
+	default:
+		err = fmt.Errorf("provider type '%s' not supported", f.provider)
+	}
 	if err != nil {
 		return nil, err
 	}
