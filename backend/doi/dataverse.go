@@ -36,18 +36,24 @@ func (f *Fs) listDataverse(ctx context.Context, dir string) (entries fs.DirEntri
 		return nil, fmt.Errorf("error listing %q: %w", dir, err)
 	}
 
+	fullDir := strings.TrimRight(path.Join(f.root, dir), "/") + "/"
+	if fullDir == "/" {
+		fullDir = ""
+	}
 	dirPaths := map[string]bool{}
 	for _, entry := range fileEntries {
-		if dir != "" && !strings.HasPrefix(entry.remote, dir) {
+		if fullDir != "" && !strings.HasPrefix(entry.remote, fullDir) {
 			continue
 		}
 		remotePath := entry.remote
-		if dir != "" {
-			remotePath = strings.TrimLeft(strings.TrimPrefix(remotePath, dir), "/")
+		if fullDir != "" {
+			remotePath = strings.TrimLeft(strings.TrimPrefix(remotePath, fullDir), "/")
 		}
 		parts := strings.SplitN(remotePath, "/", 2)
 		if len(parts) == 1 {
-			entries = append(entries, entry)
+			newEntry := *entry
+			newEntry.remote = path.Join(dir, remotePath)
+			entries = append(entries, &newEntry)
 		} else {
 			dirPaths[parts[0]] = true
 		}
