@@ -3,7 +3,6 @@ package doi
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -65,64 +64,104 @@ func (f *Fs) listDataverse(ctx context.Context, dir string) (entries fs.DirEntri
 
 // List the files contained in the DOI
 func (f *Fs) listDataverseDoiFiles(ctx context.Context) (entries []*Object, err error) {
-	URL := f.endpointURL
+	filesURL := f.endpoint
 	// Do the request
-	req, err := http.NewRequestWithContext(ctx, "GET", URL, nil)
+	// fs.Logf(f, "filesURL = '%s'", filesURL.String())
+	fs.Logf(f, "filesURL = '%s'", filesURL.String())
+	var result dataverseDataset
+	opts := rest.Opts{
+		Method:     "GET",
+		Path:       strings.TrimLeft(filesURL.EscapedPath(), "/"),
+		Parameters: filesURL.Query(),
+	}
+	fs.Logf(f, "filesAPIPath = '%s?%s'", opts.Path, opts.Parameters.Encode())
+	res, err := f.srv.CallJSON(ctx, &opts, nil, &result)
 	if err != nil {
+		fs.Logf(f, "%s", res.Status)
 		return nil, fmt.Errorf("readDir failed: %w", err)
 	}
-
-	// Manually ask for JSON
-	req.Header.Add("Accept", "application/json")
-
-	res, err := f.httpClient.Do(req)
-	if err == nil {
-		defer fs.CheckClose(res.Body, &err)
-		if res.StatusCode == http.StatusNotFound {
-			return nil, fs.ErrorDirNotFound
-		}
+	modTime, modTimeErr := time.Parse(time.RFC3339, result.Data.LatestVersion.LastUpdateTime)
+	if modTimeErr != nil {
+		fs.Logf(f, "error: could not parse last update time %v", modTimeErr)
+		modTime = timeUnset
 	}
-	err = statusError(res, err)
-	if err != nil {
-		return nil, fmt.Errorf("failed to readDir: %w", err)
+	for _, file := range result.Data.LatestVersion.Files {
+		contentURLPath := fmt.Sprintf("/api/access/datafile/%d", file.DataFile.ID)
+		query := url.Values{}
+		query.Add("format", "original")
+		contentURL := f.endpoint.ResolveReference(&url.URL{Path: contentURLPath, RawQuery: query.Encode()})
+		entry := &Object{
+			fs:   f,
+			name: file.DataFile.Filename,
+			// remote:      path.Join(file.DirectoryLabel, file.DataFile.Filename),
+			contentURL:  contentURL.String(),
+			size:        file.DataFile.Size,
+			modTime:     modTime,
+			md5:         file.DataFile.MD5,
+			contentType: file.DataFile.ContentType,
+		}
+		entries = append(entries, entry)
 	}
-
-	contentType := strings.SplitN(res.Header.Get("Content-Type"), ";", 2)[0]
-	switch contentType {
-	case "application/json":
-		// TODO: split into a parse method?
-		record := new(dataverseDataset)
-		err = rest.DecodeJSON(res, &record)
-		if err != nil {
-			return nil, fmt.Errorf("failed to readDir: %w", err)
-		}
-		modTime, modTimeErr := time.Parse(time.RFC3339, record.Data.LatestVersion.LastUpdateTime)
-		if modTimeErr != nil {
-			fs.Logf(f, "error: could not parse last update time %v", modTimeErr)
-			modTime = timeUnset
-		}
-		for _, file := range record.Data.LatestVersion.Files {
-			contentURLPath := fmt.Sprintf("/api/access/datafile/%d", file.DataFile.ID)
-			query := url.Values{}
-			query.Add("format", "original")
-			contentURL := f.endpoint.ResolveReference(&url.URL{Path: contentURLPath, RawQuery: query.Encode()})
-			entry := &Object{
-				fs:   f,
-				name: file.DataFile.Filename,
-				// remote:      path.Join(file.DirectoryLabel, file.DataFile.Filename),
-				contentURL:  contentURL.String(),
-				size:        file.DataFile.Size,
-				modTime:     modTime,
-				md5:         file.DataFile.MD5,
-				contentType: file.DataFile.ContentType,
-			}
-			entries = append(entries, entry)
-		}
-	default:
-		return nil, fmt.Errorf("can't parse content type %q", contentType)
-	}
-
 	return entries, nil
+
+	// URL := f.endpointURL
+	// // Do the request
+	// req, err := http.NewRequestWithContext(ctx, "GET", URL, nil)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("readDir failed: %w", err)
+	// }
+
+	// // Manually ask for JSON
+	// req.Header.Add("Accept", "application/json")
+
+	// res, err := f.httpClient.Do(req)
+	// if err == nil {
+	// 	defer fs.CheckClose(res.Body, &err)
+	// 	if res.StatusCode == http.StatusNotFound {
+	// 		return nil, fs.ErrorDirNotFound
+	// 	}
+	// }
+	// err = statusError(res, err)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("failed to readDir: %w", err)
+	// }
+
+	// contentType := strings.SplitN(res.Header.Get("Content-Type"), ";", 2)[0]
+	// switch contentType {
+	// case "application/json":
+	// 	// TODO: split into a parse method?
+	// 	record := new(dataverseDataset)
+	// 	err = rest.DecodeJSON(res, &record)
+	// 	if err != nil {
+	// 		return nil, fmt.Errorf("failed to readDir: %w", err)
+	// 	}
+	// 	modTime, modTimeErr := time.Parse(time.RFC3339, record.Data.LatestVersion.LastUpdateTime)
+	// 	if modTimeErr != nil {
+	// 		fs.Logf(f, "error: could not parse last update time %v", modTimeErr)
+	// 		modTime = timeUnset
+	// 	}
+	// 	for _, file := range record.Data.LatestVersion.Files {
+	// 		contentURLPath := fmt.Sprintf("/api/access/datafile/%d", file.DataFile.ID)
+	// 		query := url.Values{}
+	// 		query.Add("format", "original")
+	// 		contentURL := f.endpoint.ResolveReference(&url.URL{Path: contentURLPath, RawQuery: query.Encode()})
+	// 		entry := &Object{
+	// 			fs:   f,
+	// 			name: file.DataFile.Filename,
+	// 			// remote:      path.Join(file.DirectoryLabel, file.DataFile.Filename),
+	// 			contentURL:  contentURL.String(),
+	// 			size:        file.DataFile.Size,
+	// 			modTime:     modTime,
+	// 			md5:         file.DataFile.MD5,
+	// 			contentType: file.DataFile.ContentType,
+	// 		}
+	// 		entries = append(entries, entry)
+	// 	}
+	// default:
+	// 	return nil, fmt.Errorf("can't parse content type %q", contentType)
+	// }
+
+	// return entries, nil
 }
 
 type dataverseDataset struct {

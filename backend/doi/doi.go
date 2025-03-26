@@ -76,7 +76,8 @@ type Fs struct {
 	endpoint    *url.URL       // the main API endpoint for this remote
 	endpointURL string         // endpoint as a string
 	// TODO: replace `httpClient *http.Client` with `srv *rest.Client` (and a pacer?)
-	httpClient *http.Client // the http client
+	// httpClient *http.Client // the http client
+	srv *rest.Client // the connection to the server
 	// TODO: use a cache (from lib/cache) to keep the dataset files listing
 }
 
@@ -214,7 +215,8 @@ func (f *Fs) httpConnection(ctx context.Context, opt *Options) (isFile bool, err
 	isFile = f.root != ""
 
 	// Update f with the new parameters
-	f.httpClient = client
+	// f.httpClient = client
+	f.srv = rest.NewClient(client).SetRoot(endpoint.ResolveReference(&url.URL{Path: "/"}).String())
 	f.endpoint = endpoint
 	f.endpointURL = endpoint.String()
 	f.provider = provider
@@ -422,23 +424,28 @@ func (o *Object) Storable() bool {
 func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.ReadCloser, err error) {
 	fs.FixRangeOption(options, o.size)
 
-	url := o.contentURL
-	fs.Logf(nil, "Open URL = %s", url)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("Open failed: %w", err)
-	}
+	// url := o.contentURL
+	// fs.Logf(nil, "Open URL = %s", url)
+	// req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	// if err != nil {
+	// 	return nil, fmt.Errorf("Open failed: %w", err)
+	// }
 
-	// Add optional headers
-	for k, v := range fs.OpenOptionHeaders(options) {
-		fs.Logf(o, "header %s = %s", k, v)
-		req.Header.Add(k, v)
-	}
-	// o.fs.addHeaders(req)
+	// // Add optional headers
+	// for k, v := range fs.OpenOptionHeaders(options) {
+	// 	fs.Logf(o, "header %s = %s", k, v)
+	// 	req.Header.Add(k, v)
+	// }
 
 	// Do the request
-	res, err := o.fs.httpClient.Do(req)
-	err = statusError(res, err)
+	// res, err := o.fs.httpClient.Do(req)
+	opts := rest.Opts{
+		Method:  "GET",
+		RootURL: o.contentURL,
+		Options: options,
+	}
+	res, err := o.fs.srv.Call(ctx, &opts)
+	// err = statusError(res, err)
 	if err != nil {
 		return nil, fmt.Errorf("Open failed: %w", err)
 	}
@@ -458,24 +465,24 @@ func (o *Object) MimeType(ctx context.Context) string {
 	return o.contentType
 }
 
-// head sends a HEAD request to update info fields in the Object
-func (o *Object) head(ctx context.Context) error {
-	url := o.contentURL
-	fs.Logf(nil, "HEAD URL = %s", url)
-	req, err := http.NewRequestWithContext(ctx, "HEAD", url, nil)
-	if err != nil {
-		return fmt.Errorf("stat failed: %w", err)
-	}
-	res, err := o.fs.httpClient.Do(req)
-	if err == nil && res.StatusCode == http.StatusNotFound {
-		return fs.ErrorObjectNotFound
-	}
-	err = statusError(res, err)
-	if err != nil {
-		return fmt.Errorf("failed to stat: %w", err)
-	}
-	return o.decodeMetadata(res)
-}
+// // head sends a HEAD request to update info fields in the Object
+// func (o *Object) head(ctx context.Context) error {
+// 	url := o.contentURL
+// 	fs.Logf(nil, "HEAD URL = %s", url)
+// 	req, err := http.NewRequestWithContext(ctx, "HEAD", url, nil)
+// 	if err != nil {
+// 		return fmt.Errorf("stat failed: %w", err)
+// 	}
+// 	res, err := o.fs.httpClient.Do(req)
+// 	if err == nil && res.StatusCode == http.StatusNotFound {
+// 		return fs.ErrorObjectNotFound
+// 	}
+// 	err = statusError(res, err)
+// 	if err != nil {
+// 		return fmt.Errorf("failed to stat: %w", err)
+// 	}
+// 	return o.decodeMetadata(res)
+// }
 
 // decodeMetadata updates info fields in the Object according to HTTP response headers
 func (o *Object) decodeMetadata(res *http.Response) error {
@@ -491,9 +498,9 @@ func (o *Object) decodeMetadata(res *http.Response) error {
 
 // Check the interfaces are satisfied
 var (
-	_ fs.Fs          = &Fs{}
-	_ fs.PutStreamer = &Fs{}
-	_ fs.Object      = &Object{}
-	_ fs.MimeTyper   = &Object{}
+	_ fs.Fs          = (*Fs)(nil)
+	_ fs.PutStreamer = (*Fs)(nil)
+	_ fs.Object      = (*Object)(nil)
+	_ fs.MimeTyper   = (*Object)(nil)
 	// _ fs.Commander   = &Fs{}
 )

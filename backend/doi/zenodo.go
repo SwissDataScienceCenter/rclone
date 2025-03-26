@@ -89,55 +89,33 @@ func (f *Fs) listZenodo(ctx context.Context, dir string) (entries fs.DirEntries,
 func (f *Fs) listZenodoDoiFiles(ctx context.Context) (entries []*Object, err error) {
 	filesURL := f.endpoint.JoinPath("files")
 	// Do the request
-	fs.Logf(f, "filesURL = '%s'", filesURL.String())
-	req, err := http.NewRequestWithContext(ctx, "GET", filesURL.String(), nil)
+	// fs.Logf(f, "filesURL = '%s'", filesURL.String())
+	var result zenodoFilesResponse
+	opts := rest.Opts{
+		Method: "GET",
+		Path:   strings.TrimLeft(filesURL.EscapedPath(), "/"),
+	}
+	fs.Logf(f, "filesAPIPath = '%s'", opts.Path)
+	_, err = f.srv.CallJSON(ctx, &opts, nil, &result)
 	if err != nil {
 		return nil, fmt.Errorf("readDir failed: %w", err)
 	}
-
-	// Manually ask for JSON
-	req.Header.Add("Accept", "application/json")
-
-	res, err := f.httpClient.Do(req)
-	if err == nil {
-		defer fs.CheckClose(res.Body, &err)
-		if res.StatusCode == http.StatusNotFound {
-			return nil, fs.ErrorDirNotFound
+	for _, file := range result.Entries {
+		modTime, modTimeErr := time.Parse(time.RFC3339, file.Updated)
+		if modTimeErr != nil {
+			fs.Logf(f, "error: could not parse last update time %v", modTimeErr)
+			modTime = timeUnset
 		}
-	}
-	err = statusError(res, err)
-	if err != nil {
-		return nil, fmt.Errorf("failed to readDir: %w", err)
-	}
-
-	contentType := strings.SplitN(res.Header.Get("Content-Type"), ";", 2)[0]
-	switch contentType {
-	case "application/json":
-		// TODO: split into a parse method?
-		record := new(zenodoFilesResponse)
-		err = rest.DecodeJSON(res, &record)
-		if err != nil {
-			return nil, fmt.Errorf("failed to readDir: %w", err)
+		entry := &Object{
+			fs:          f,
+			name:        file.Key,
+			contentURL:  file.Links.Content,
+			size:        file.Size,
+			modTime:     modTime,
+			contentType: file.MimeType,
+			md5:         strings.TrimLeft(file.Checksum, "md5:"),
 		}
-		for _, file := range record.Entries {
-			modTime, modTimeErr := time.Parse(time.RFC3339, file.Updated)
-			if modTimeErr != nil {
-				fs.Logf(f, "error: could not parse last update time %v", modTimeErr)
-				modTime = timeUnset
-			}
-			entry := &Object{
-				fs:          f,
-				name:        file.Key,
-				contentURL:  file.Links.Content,
-				size:        file.Size,
-				modTime:     modTime,
-				contentType: file.MimeType,
-				md5:         strings.TrimLeft(file.Checksum, "md5:"),
-			}
-			entries = append(entries, entry)
-		}
-	default:
-		return nil, fmt.Errorf("can't parse content type %q", contentType)
+		entries = append(entries, entry)
 	}
 
 	return entries, nil
