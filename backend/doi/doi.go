@@ -124,16 +124,35 @@ type doiResolverResponseValueData struct {
 	Value  any    `json:"value"`
 }
 
+// Parse the input string as a DOI
+// Examples:
+// 10.1000/182 -> 10.1000/182
+// https://doi.org/10.1000/182 -> 10.1000/182
+// doi:10.1000/182 -> 10.1000/182
+func parseDoi(doi string) string {
+	doiURL, err := url.Parse(doi)
+	if err != nil {
+		return doi
+	}
+	if doiURL.Scheme == "doi" {
+		return strings.TrimLeft(strings.TrimLeft(doi, "doi:"), "/")
+	}
+	if strings.HasSuffix(doiURL.Hostname(), "doi.org") {
+		return strings.TrimLeft(doiURL.Path, "/")
+	}
+	return doi
+}
+
 // Resolve a DOI to a URL
 // Reference: https://www.doi.org/the-identifier/resources/factsheets/doi-resolution-documentation
 func resolveDoiURL(ctx context.Context, client *http.Client, opt *Options) (doiURL *url.URL, err error) {
-	// TODO: this assumes `opt.Doi` is a pure DOI
+	doi := parseDoi(opt.Doi)
 	doiRestClient := rest.NewClient(client).SetRoot(doiResolverApiURL)
 	params := url.Values{}
 	params.Add("index", "1")
 	opts := rest.Opts{
 		Method:     "GET",
-		Path:       "/handles/" + opt.Doi,
+		Path:       "/handles/" + doi,
 		Parameters: params,
 	}
 	var result doiResolverResponse
