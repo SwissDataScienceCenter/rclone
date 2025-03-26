@@ -12,6 +12,7 @@ import (
 	"github.com/rclone/rclone/lib/rest"
 )
 
+// Resolve the main API endpoint for a DOI hosted on a Dataverse installation
 func resolveDataverseEndpoint(resolvedURL *url.URL) (provider Provider, endpoint *url.URL, err error) {
 	fs.Logf(nil, "dataverseURL = %s", resolvedURL.String())
 
@@ -25,9 +26,10 @@ func resolveDataverseEndpoint(resolvedURL *url.URL) (provider Provider, endpoint
 	endpointURL := resolvedURL.ResolveReference(&url.URL{Path: "/api/datasets/:persistentId/", RawQuery: query.Encode()})
 
 	fs.Logf(nil, "endpointURL = %s", endpointURL)
-	return Dataverse, endpointURL, err
+	return Dataverse, endpointURL, nil
 }
 
+// Implements Fs.List() for Dataverse installations
 func (f *Fs) listDataverse(ctx context.Context, dir string) (entries fs.DirEntries, err error) {
 	// TODO: support subfolders (`directoryLabel`)
 	if dir != "" {
