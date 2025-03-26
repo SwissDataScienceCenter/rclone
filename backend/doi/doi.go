@@ -194,7 +194,7 @@ func resolveEndpoint(ctx context.Context, client *http.Client, opt *Options) (pr
 	}
 
 	if hostname == "zenodo.org" || strings.HasSuffix(hostname, ".zenodo.org") {
-		return resolveZenodoEndpoint(resolvedURL, opt.Doi)
+		return resolveZenodoEndpoint(ctx, client, resolvedURL, opt.Doi)
 	}
 
 	return "", nil, fmt.Errorf("provider '%s' is not supported", resolvedURL.Hostname())
@@ -272,7 +272,7 @@ func (f *Fs) Root() string {
 
 // String returns the URL for the filesystem
 func (f *Fs) String() string {
-	return f.endpointURL
+	return fmt.Sprintf("DOI %s", f.opt.Doi)
 }
 
 // Features returns the optional features of this Fs
@@ -325,22 +325,6 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 	}
 
 	return nil, fs.ErrorObjectNotFound
-}
-
-type zenodoRecord struct {
-	Files []zenodoDatasetFile `json:"files"`
-}
-
-type zenodoDatasetFile struct {
-	ID       string      `json:"id"`
-	Key      string      `json:"key"`
-	Size     int64       `json:"size"`
-	Checksum string      `json:"checksum"`
-	Links    zenodoLinks `json:"links"`
-}
-
-type zenodoLinks struct {
-	Self string `json:"self"`
 }
 
 // List the objects and directories in dir into entries.  The
