@@ -83,41 +83,6 @@ func (f *Fs) listZenodo(ctx context.Context, dir string) (entries fs.DirEntries,
 		entries = append(entries, entry)
 	}
 	return entries, nil
-
-	// var (
-	// 	entriesMu sync.Mutex // to protect entries
-	// 	wg        sync.WaitGroup
-	// 	checkers  = f.ci.Checkers
-	// 	in        = make(chan int, checkers)
-	// )
-	// update := func(idx int, fileEntry *Object) {
-	// 	entriesMu.Lock()
-	// 	fileEntries[idx] = fileEntry
-	// 	entriesMu.Unlock()
-	// }
-	// for i := 0; i < checkers; i++ {
-	// 	wg.Add(1)
-	// 	go func() {
-	// 		defer wg.Done()
-	// 		for idx := range in {
-	// 			file := fileEntries[idx]
-	// 			err := file.head(ctx)
-	// 			if err != nil {
-	// 				fs.Debugf(file, "skipping because of error: %v", err)
-	// 			}
-	// 			update(idx, file)
-	// 		}
-	// 	}()
-	// }
-	// for idx := range fileEntries {
-	// 	in <- idx
-	// }
-	// close(in)
-	// wg.Wait()
-	// for _, entry := range fileEntries {
-	// 	entries = append(entries, entry)
-	// }
-	// return entries, nil
 }
 
 // List the files contained in the DOI
@@ -157,7 +122,7 @@ func (f *Fs) listZenodoDoiFiles(ctx context.Context) (entries []*Object, err err
 		for _, file := range record.Entries {
 			modTime, modTimeErr := time.Parse(time.RFC3339, file.Updated)
 			if modTimeErr != nil {
-				fs.Logf(f, "rrror: could not parse last update time %v", modTimeErr)
+				fs.Logf(f, "error: could not parse last update time %v", modTimeErr)
 				modTime = timeUnset
 			}
 			entry := &Object{

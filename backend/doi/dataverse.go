@@ -82,7 +82,7 @@ func (f *Fs) listDataverseDoiFiles(ctx context.Context) (entries []*Object, err 
 		}
 		modTime, modTimeErr := time.Parse(time.RFC3339, record.Data.LatestVersion.LastUpdateTime)
 		if modTimeErr != nil {
-			fs.Logf(f, "rrror: could not parse last update time %v", modTimeErr)
+			fs.Logf(f, "error: could not parse last update time %v", modTimeErr)
 			modTime = timeUnset
 		}
 		for _, file := range record.Data.LatestVersion.Files {
