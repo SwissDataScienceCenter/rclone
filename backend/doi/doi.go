@@ -85,6 +85,7 @@ type Object struct {
 	fs   *Fs    // what this object is part of
 	name string // the name of the file
 	// TODO: use `remote` field?
+	// remote      string    // the remote path
 	contentURL  string    // the URL where the contents of the file can be downloaded
 	size        int64     // size of the object
 	modTime     time.Time // modification time of the object
