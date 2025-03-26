@@ -87,6 +87,19 @@ func (f *Fs) listZenodo(ctx context.Context, dir string) (entries fs.DirEntries,
 
 // List the files contained in the DOI
 func (f *Fs) listZenodoDoiFiles(ctx context.Context) (entries []*Object, err error) {
+	// Use the cache if populated
+	cachedEntries, found := f.cache.GetMaybe("files")
+	if found {
+		fs.Logf(f, "cache hit")
+		parsedEntries, ok := cachedEntries.([]Object)
+		if ok {
+			for _, entry := range parsedEntries {
+				entries = append(entries, &entry)
+			}
+			return entries, nil
+		}
+	}
+
 	filesURL := f.endpoint.JoinPath("files")
 	// Do the request
 	// fs.Logf(f, "filesURL = '%s'", filesURL.String())
@@ -109,6 +122,7 @@ func (f *Fs) listZenodoDoiFiles(ctx context.Context) (entries []*Object, err err
 		entry := &Object{
 			fs:          f,
 			name:        file.Key,
+			remote:      file.Key,
 			contentURL:  file.Links.Content,
 			size:        file.Size,
 			modTime:     modTime,
@@ -117,7 +131,12 @@ func (f *Fs) listZenodoDoiFiles(ctx context.Context) (entries []*Object, err err
 		}
 		entries = append(entries, entry)
 	}
-
+	// Populate the cache
+	cacheEntries := []Object{}
+	for _, entry := range entries {
+		cacheEntries = append(cacheEntries, *entry)
+	}
+	f.cache.Put("files", cacheEntries)
 	return entries, nil
 }
 

@@ -17,6 +17,7 @@ import (
 	"github.com/rclone/rclone/fs/config/configstruct"
 	"github.com/rclone/rclone/fs/fshttp"
 	"github.com/rclone/rclone/fs/hash"
+	"github.com/rclone/rclone/lib/cache"
 	"github.com/rclone/rclone/lib/rest"
 )
 
@@ -69,16 +70,17 @@ type Options struct {
 type Fs struct {
 	name        string         // name of this remote
 	root        string         // the path we are working on
+	doi         string         // the parsed DOI
 	provider    Provider       // the DOI provider
 	features    *fs.Features   // optional features
 	opt         Options        // options for this backend
 	ci          *fs.ConfigInfo // global config
 	endpoint    *url.URL       // the main API endpoint for this remote
 	endpointURL string         // endpoint as a string
-	// TODO: replace `httpClient *http.Client` with `srv *rest.Client` (and a pacer?)
-	// httpClient *http.Client // the http client
-	srv *rest.Client // the connection to the server
+	srv         *rest.Client   // the connection to the server
+	// TODO: add a pacer (from fs) for HTTP requests
 	// TODO: use a cache (from lib/cache) to keep the dataset files listing
+	cache *cache.Cache // a cache for the remote metadata
 }
 
 // Object is a remote object that has been stat'd (so it exists, but is not necessarily open for reading)
@@ -86,7 +88,7 @@ type Object struct {
 	fs   *Fs    // what this object is part of
 	name string // the name of the file
 	// TODO: use `remote` field?
-	// remote      string    // the remote path
+	remote      string    // the remote path
 	contentURL  string    // the URL where the contents of the file can be downloaded
 	size        int64     // size of the object
 	modTime     time.Time // modification time of the object
@@ -215,10 +217,11 @@ func (f *Fs) httpConnection(ctx context.Context, opt *Options) (isFile bool, err
 	isFile = f.root != ""
 
 	// Update f with the new parameters
-	// f.httpClient = client
 	f.srv = rest.NewClient(client).SetRoot(endpoint.ResolveReference(&url.URL{Path: "/"}).String())
+	f.cache = cache.New()
 	f.endpoint = endpoint
 	f.endpointURL = endpoint.String()
+	f.doi = parseDoi(opt.Doi) // TODO: avoid calling parseDoi() again here
 	f.provider = provider
 	return isFile, nil
 }
@@ -275,7 +278,7 @@ func (f *Fs) Root() string {
 
 // String returns the URL for the filesystem
 func (f *Fs) String() string {
-	return fmt.Sprintf("DOI %s", f.opt.Doi)
+	return fmt.Sprintf("DOI %s", f.doi)
 }
 
 // Features returns the optional features of this Fs
@@ -382,12 +385,12 @@ func (o *Object) String() string {
 	if o == nil {
 		return "<nil>"
 	}
-	return o.name
+	return o.remote
 }
 
 // Remote the name of the remote HTTP file, relative to the fs root
 func (o *Object) Remote() string {
-	return o.name
+	return o.remote
 }
 
 // Hash returns "" since HTTP (in Go or OpenSSH) doesn't support remote calculation of hashes

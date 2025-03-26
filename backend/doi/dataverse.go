@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
@@ -30,40 +31,52 @@ func resolveDataverseEndpoint(resolvedURL *url.URL) (provider Provider, endpoint
 
 // Implements Fs.List() for Dataverse installations
 func (f *Fs) listDataverse(ctx context.Context, dir string) (entries fs.DirEntries, err error) {
-	// TODO: support subfolders (`directoryLabel`)
-	if dir != "" {
-		err := fmt.Errorf("doi remote does not support subfolders")
-		return nil, fmt.Errorf("error listing %q: %w", dir, err)
-	}
-
 	fileEntries, err := f.listDataverseDoiFiles(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("error listing %q: %w", dir, err)
 	}
+
+	dirPaths := map[string]bool{}
 	for _, entry := range fileEntries {
+		if dir != "" && !strings.HasPrefix(entry.remote, dir) {
+			continue
+		}
+		remotePath := entry.remote
+		if dir != "" {
+			remotePath = strings.TrimLeft(strings.TrimPrefix(remotePath, dir), "/")
+		}
+		parts := strings.SplitN(remotePath, "/", 2)
+		if len(parts) == 1 {
+			entries = append(entries, entry)
+		} else {
+			dirPaths[parts[0]] = true
+		}
+	}
+	for dirPath := range dirPaths {
+		entry := fs.NewDir(path.Join(dir, dirPath), time.Time{})
 		entries = append(entries, entry)
 	}
 	return entries, nil
-
-	// TODO: support subfolders, see below:
-	// dirPaths := map[string]bool{}
-	// for _, entry := range fileEntries {
-	// 	parts := strings.SplitN(entry.remote, "/", 2)
-	// 	if len(parts) == 1 {
-	// 		entries = append(entries, entry)
-	// 	} else {
-	// 		dirPaths[parts[0]] = true
-	// 	}
-	// }
-	// for dirPath := range dirPaths {
-	// 	entry := fs.NewDir(dirPath, time.Time{})
-	// 	entries = append(entries, entry)
-	// }
-	// return entries, nil
 }
 
 // List the files contained in the DOI
 func (f *Fs) listDataverseDoiFiles(ctx context.Context) (entries []*Object, err error) {
+	// Use the cache if populated
+	cachedEntries, found := f.cache.GetMaybe("files")
+	if found {
+		// fs.Logf(f, "cache hit, '%s'", cachedEntries)
+		parsedEntries, ok := cachedEntries.([]Object)
+		if ok {
+			for _, entry := range parsedEntries {
+				// fs.Logf(f, "cache hit, entry = '%v'", entry)
+				newEntry := entry
+				entries = append(entries, &newEntry)
+			}
+			// fs.Logf(f, "cache hit, entries = '%v'", entries)
+			return entries, nil
+		}
+	}
+
 	filesURL := f.endpoint
 	// Do the request
 	// fs.Logf(f, "filesURL = '%s'", filesURL.String())
@@ -91,9 +104,9 @@ func (f *Fs) listDataverseDoiFiles(ctx context.Context) (entries []*Object, err 
 		query.Add("format", "original")
 		contentURL := f.endpoint.ResolveReference(&url.URL{Path: contentURLPath, RawQuery: query.Encode()})
 		entry := &Object{
-			fs:   f,
-			name: file.DataFile.Filename,
-			// remote:      path.Join(file.DirectoryLabel, file.DataFile.Filename),
+			fs:          f,
+			name:        file.DataFile.Filename,
+			remote:      path.Join(file.DirectoryLabel, file.DataFile.Filename),
 			contentURL:  contentURL.String(),
 			size:        file.DataFile.Size,
 			modTime:     modTime,
@@ -102,66 +115,13 @@ func (f *Fs) listDataverseDoiFiles(ctx context.Context) (entries []*Object, err 
 		}
 		entries = append(entries, entry)
 	}
+	// Populate the cache
+	cacheEntries := []Object{}
+	for _, entry := range entries {
+		cacheEntries = append(cacheEntries, *entry)
+	}
+	f.cache.Put("files", cacheEntries)
 	return entries, nil
-
-	// URL := f.endpointURL
-	// // Do the request
-	// req, err := http.NewRequestWithContext(ctx, "GET", URL, nil)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("readDir failed: %w", err)
-	// }
-
-	// // Manually ask for JSON
-	// req.Header.Add("Accept", "application/json")
-
-	// res, err := f.httpClient.Do(req)
-	// if err == nil {
-	// 	defer fs.CheckClose(res.Body, &err)
-	// 	if res.StatusCode == http.StatusNotFound {
-	// 		return nil, fs.ErrorDirNotFound
-	// 	}
-	// }
-	// err = statusError(res, err)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("failed to readDir: %w", err)
-	// }
-
-	// contentType := strings.SplitN(res.Header.Get("Content-Type"), ";", 2)[0]
-	// switch contentType {
-	// case "application/json":
-	// 	// TODO: split into a parse method?
-	// 	record := new(dataverseDataset)
-	// 	err = rest.DecodeJSON(res, &record)
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("failed to readDir: %w", err)
-	// 	}
-	// 	modTime, modTimeErr := time.Parse(time.RFC3339, record.Data.LatestVersion.LastUpdateTime)
-	// 	if modTimeErr != nil {
-	// 		fs.Logf(f, "error: could not parse last update time %v", modTimeErr)
-	// 		modTime = timeUnset
-	// 	}
-	// 	for _, file := range record.Data.LatestVersion.Files {
-	// 		contentURLPath := fmt.Sprintf("/api/access/datafile/%d", file.DataFile.ID)
-	// 		query := url.Values{}
-	// 		query.Add("format", "original")
-	// 		contentURL := f.endpoint.ResolveReference(&url.URL{Path: contentURLPath, RawQuery: query.Encode()})
-	// 		entry := &Object{
-	// 			fs:   f,
-	// 			name: file.DataFile.Filename,
-	// 			// remote:      path.Join(file.DirectoryLabel, file.DataFile.Filename),
-	// 			contentURL:  contentURL.String(),
-	// 			size:        file.DataFile.Size,
-	// 			modTime:     modTime,
-	// 			md5:         file.DataFile.MD5,
-	// 			contentType: file.DataFile.ContentType,
-	// 		}
-	// 		entries = append(entries, entry)
-	// 	}
-	// default:
-	// 	return nil, fmt.Errorf("can't parse content type %q", contentType)
-	// }
-
-	// return entries, nil
 }
 
 type dataverseDataset struct {
