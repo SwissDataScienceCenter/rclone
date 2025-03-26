@@ -45,6 +45,22 @@ func (f *Fs) listDataverse(ctx context.Context, dir string) (entries fs.DirEntri
 		entries = append(entries, entry)
 	}
 	return entries, nil
+
+	// TODO: support subfolders, see below:
+	// dirPaths := map[string]bool{}
+	// for _, entry := range fileEntries {
+	// 	parts := strings.SplitN(entry.remote, "/", 2)
+	// 	if len(parts) == 1 {
+	// 		entries = append(entries, entry)
+	// 	} else {
+	// 		dirPaths[parts[0]] = true
+	// 	}
+	// }
+	// for dirPath := range dirPaths {
+	// 	entry := fs.NewDir(dirPath, time.Time{})
+	// 	entries = append(entries, entry)
+	// }
+	// return entries, nil
 }
 
 // List the files contained in the DOI
@@ -86,13 +102,14 @@ func (f *Fs) listDataverseDoiFiles(ctx context.Context) (entries []*Object, err 
 			modTime = timeUnset
 		}
 		for _, file := range record.Data.LatestVersion.Files {
-			path := fmt.Sprintf("/api/access/datafile/%d", file.DataFile.ID)
+			contentURLPath := fmt.Sprintf("/api/access/datafile/%d", file.DataFile.ID)
 			query := url.Values{}
 			query.Add("format", "original")
-			contentURL := f.endpoint.ResolveReference(&url.URL{Path: path, RawQuery: query.Encode()})
+			contentURL := f.endpoint.ResolveReference(&url.URL{Path: contentURLPath, RawQuery: query.Encode()})
 			entry := &Object{
-				fs:          f,
-				name:        file.DataFile.Filename,
+				fs:   f,
+				name: file.DataFile.Filename,
+				// remote:      path.Join(file.DirectoryLabel, file.DataFile.Filename),
 				contentURL:  contentURL.String(),
 				size:        file.DataFile.Size,
 				modTime:     modTime,
@@ -122,7 +139,8 @@ type dataverseDatasetLatestVersion struct {
 }
 
 type dataverseFile struct {
-	DataFile dataverseDataFile `json:"dataFile"`
+	DirectoryLabel string            `json:"directoryLabel"`
+	DataFile       dataverseDataFile `json:"dataFile"`
 }
 
 type dataverseDataFile struct {
