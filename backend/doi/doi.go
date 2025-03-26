@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/rclone/rclone/fs"
@@ -194,38 +193,11 @@ func resolveEndpoint(ctx context.Context, client *http.Client, opt *Options) (pr
 		return resolveDataverseEndpoint(resolvedURL)
 	}
 
-	if hostname != "zenodo.org" || strings.HasSuffix(hostname, ".zenodo.org") {
-		return "", nil, fmt.Errorf("provider '%s' is not supported", resolvedURL.Hostname())
+	if hostname == "zenodo.org" || strings.HasSuffix(hostname, ".zenodo.org") {
+		return resolveZenodoEndpoint(resolvedURL, opt.Doi)
 	}
 
-	fs.Logf(nil, "zenodoURL = %s", resolvedURL.String())
-
-	req, err := http.NewRequestWithContext(ctx, "HEAD", resolvedURL.String(), nil)
-	if err != nil {
-		return "", nil, err
-	}
-	res, err := client.Do(req)
-	if err == nil {
-		defer fs.CheckClose(res.Body, &err)
-		if res.StatusCode == http.StatusNotFound {
-			return "", nil, fs.ErrorDirNotFound
-		}
-	}
-	err = statusError(res, err)
-	if err != nil {
-		return "", nil, err
-	}
-
-	links := parseLinkHeader(res.Header.Get("Link"))
-	linksetURL := ""
-	for _, link := range links {
-		if link.Rel == "linkset" {
-			linksetURL = link.Href
-		}
-	}
-	fs.Logf(nil, "linksetURL = %s", linksetURL)
-	endpoint, err = url.Parse(linksetURL)
-	return Zenodo, endpoint, err
+	return "", nil, fmt.Errorf("provider '%s' is not supported", resolvedURL.Hostname())
 }
 
 // Make the http connection from the passed options
@@ -339,7 +311,8 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 	fs.Logf(nil, "remote = %s", remote)
 
 	// TODO: Can we avoid listing the files?
-	entries, err := f.listDoiFiles(ctx)
+	// TODO: fix for dataverse
+	entries, err := f.listZenodoDoiFiles(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -370,58 +343,6 @@ type zenodoLinks struct {
 	Self string `json:"self"`
 }
 
-// List the files contained in the DOI
-func (f *Fs) listDoiFiles(ctx context.Context) (entries []*Object, err error) {
-	URL := f.endpointURL
-	// Do the request
-	req, err := http.NewRequestWithContext(ctx, "GET", URL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("readDir failed: %w", err)
-	}
-
-	// Manually ask for JSON
-	req.Header.Add("Accept", "application/json")
-
-	res, err := f.httpClient.Do(req)
-	if err == nil {
-		defer fs.CheckClose(res.Body, &err)
-		if res.StatusCode == http.StatusNotFound {
-			return nil, fs.ErrorDirNotFound
-		}
-	}
-	err = statusError(res, err)
-	if err != nil {
-		return nil, fmt.Errorf("failed to readDir: %w", err)
-	}
-
-	contentType := strings.SplitN(res.Header.Get("Content-Type"), ";", 2)[0]
-	switch contentType {
-	case "application/json":
-		// TODO: split into a parse method?
-		record := new(zenodoRecord)
-		err = rest.DecodeJSON(res, &record)
-		if err != nil {
-			return nil, fmt.Errorf("failed to readDir: %w", err)
-		}
-		for _, file := range record.Files {
-			entry := &Object{
-				fs:         f,
-				name:       file.Key,
-				contentURL: file.Links.Self,
-				size:       file.Size,
-				modTime:    timeUnset,
-				md5:        strings.TrimLeft(file.Checksum, "md5:"),
-			}
-			entries = append(entries, entry)
-
-		}
-	default:
-		return nil, fmt.Errorf("can't parse content type %q", contentType)
-	}
-
-	return entries, nil
-}
-
 // List the objects and directories in dir into entries.  The
 // entries can be returned in any order but should be for a
 // complete directory.
@@ -432,55 +353,14 @@ func (f *Fs) listDoiFiles(ctx context.Context) (entries []*Object, err error) {
 // This should return ErrDirNotFound if the directory isn't
 // found.
 func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err error) {
-	if f.provider == Dataverse {
+	switch f.provider {
+	case Dataverse:
 		return f.listDataverse(ctx, dir)
+	case Zenodo:
+		return f.listZenodo(ctx, dir)
+	default:
+		return nil, fmt.Errorf("provider type '%s' not supported", f.provider)
 	}
-
-	if dir != "" {
-		// err := fmt.Errorf("doi remote does not support subfolders")
-		// return nil, fmt.Errorf("error listing %q: %w", dir, err)
-		return nil, fs.ErrorDirNotFound
-	}
-
-	fileEntries, err := f.listDoiFiles(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("error listing %q: %w", dir, err)
-	}
-
-	var (
-		entriesMu sync.Mutex // to protect entries
-		wg        sync.WaitGroup
-		checkers  = f.ci.Checkers
-		in        = make(chan int, checkers)
-	)
-	update := func(idx int, fileEntry *Object) {
-		entriesMu.Lock()
-		fileEntries[idx] = fileEntry
-		entriesMu.Unlock()
-	}
-	for i := 0; i < checkers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for idx := range in {
-				file := fileEntries[idx]
-				err := file.head(ctx)
-				if err != nil {
-					fs.Debugf(file, "skipping because of error: %v", err)
-				}
-				update(idx, file)
-			}
-		}()
-	}
-	for idx := range fileEntries {
-		in <- idx
-	}
-	close(in)
-	wg.Wait()
-	for _, entry := range fileEntries {
-		entries = append(entries, entry)
-	}
-	return entries, nil
 }
 
 // Put in to the remote path with the modTime given of the given size
