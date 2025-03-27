@@ -23,6 +23,7 @@ import (
 )
 
 // the URL of the DOI resolver
+//
 // Reference: https://www.doi.org/the-identifier/resources/factsheets/doi-resolution-documentation
 const doiResolverApiURL = "https://doi.org/api"
 
@@ -36,7 +37,7 @@ func init() {
 		Name:        "doi",
 		Description: "DOI datasets",
 		NewFs:       NewFs,
-		// CommandHelp: commandHelp,
+		CommandHelp: commandHelp,
 		Options: []fs.Option{{
 			Name:     "doi",
 			Help:     "The DOI or the doi.org URL.",
@@ -47,6 +48,9 @@ func init() {
 			Examples: []fs.OptionExample{{
 				Value: "Zenodo",
 				Help:  "Zenodo",
+			}, {
+				Value: "Dataverse",
+				Help:  "Dataverse",
 			}},
 			Required: false,
 		}},
@@ -54,17 +58,20 @@ func init() {
 	fs.Register(fsi)
 }
 
+// Provider defines the type of provider hosting the DOI
 type Provider string
 
 var (
-	Zenodo    Provider = "zenodo"
+	// Zenodo, see https://zenodo.org
+	Zenodo Provider = "zenodo"
+	// Dataverse, see https://dataverse.harvard.edu
 	Dataverse Provider = "dataverse"
 )
 
 // Options defines the configuration for this backend
 type Options struct {
-	Doi      string `config:"doi"`
-	Provider string `config:"provider"`
+	Doi      string `config:"doi"`      // The DOI, a digital identifier of an object, usually a dataset
+	Provider string `config:"provider"` // The DOI provider
 }
 
 // Fs stores the interface to the remote HTTP files
@@ -480,11 +487,92 @@ func (o *Object) MimeType(ctx context.Context) string {
 	return o.contentType
 }
 
+var commandHelp = []fs.CommandHelp{{
+	Name:  "show-metadata",
+	Short: "Show metadata about the DOI.",
+	Long: `This command returns the JSON representation of the DOI.
+
+    rclone backend show-medatadata doi: 
+
+It returns a JSON object representing the DOI.
+`,
+}, {
+	Name:  "set",
+	Short: "Set command for updating the config parameters.",
+	Long: `This set command can be used to update the config parameters
+for a running doi backend.
+
+Usage Examples:
+
+    rclone backend set doi: [-o opt_name=opt_value] [-o opt_name2=opt_value2]
+    rclone rc backend/command command=set fs=doi: [-o opt_name=opt_value] [-o opt_name2=opt_value2]
+    rclone rc backend/command command=set fs=doi: -o doi=NEW_DOI
+
+The option keys are named as they are in the config file.
+
+This rebuilds the connection to the doi backend when it is called with
+the new parameters. Only new parameters need be passed as the values
+will default to those currently in use.
+
+It doesn't return anything.
+`,
+}}
+
+// Command the backend to run a named command
+//
+// The command run is name
+// args may be used to read arguments from
+// opts may be used to read optional arguments from
+//
+// The result should be capable of being JSON encoded
+// If it is a string or a []string it will be shown to the user
+// otherwise it will be JSON encoded and shown to the user like that
+func (f *Fs) Command(ctx context.Context, name string, arg []string, opt map[string]string) (out interface{}, err error) {
+	switch name {
+	case "show-metadata":
+		return f.ShowMetadata(ctx)
+	case "set":
+		newOpt := f.opt
+		err := configstruct.Set(configmap.Simple(opt), &newOpt)
+		if err != nil {
+			return nil, fmt.Errorf("reading config: %w", err)
+		}
+		_, err = f.httpConnection(ctx, &newOpt)
+		if err != nil {
+			return nil, fmt.Errorf("updating session: %w", err)
+		}
+		f.opt = newOpt
+		keys := []string{}
+		for k := range opt {
+			keys = append(keys, k)
+		}
+		fs.Logf(f, "Updated config values: %s", strings.Join(keys, ", "))
+		return nil, nil
+	default:
+		return nil, fs.ErrorCommandNotFound
+	}
+}
+
+// ShowMetadata returns the metadata associated with the DOI
+func (f *Fs) ShowMetadata(ctx context.Context) (metadata interface{}, err error) {
+	metadataURL := f.endpoint
+	var result any
+	opts := rest.Opts{
+		Method:  "GET",
+		RootURL: metadataURL.String(),
+	}
+	_, err = f.srv.CallJSON(ctx, &opts, nil, &result)
+	if err != nil {
+		return nil, err
+	}
+	return result, err
+}
+
 // Check the interfaces are satisfied
 var (
 	_ fs.Fs          = (*Fs)(nil)
 	_ fs.PutStreamer = (*Fs)(nil)
+	_ fs.Commander   = (*Fs)(nil)
 	_ fs.Object      = (*Object)(nil)
 	_ fs.MimeTyper   = (*Object)(nil)
-	// _ fs.Commander   = &Fs{}
 )
