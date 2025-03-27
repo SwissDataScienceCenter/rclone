@@ -84,8 +84,6 @@ func (f *Fs) listDataverseDoiFiles(ctx context.Context) (entries []*Object, err 
 	}
 
 	filesURL := f.endpoint
-	// Do the request
-	// fs.Logf(f, "filesURL = '%s'", filesURL.String())
 	fs.Logf(f, "filesURL = '%s'", filesURL.String())
 	var result dataverseDataset
 	opts := rest.Opts{
