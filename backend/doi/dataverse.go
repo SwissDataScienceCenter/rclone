@@ -112,10 +112,16 @@ func (f *Fs) listDataverseDoiFiles(ctx context.Context) (entries []*Object, err 
 			name:        file.DataFile.Filename,
 			remote:      path.Join(file.DirectoryLabel, file.DataFile.Filename),
 			contentURL:  contentURL.String(),
-			size:        file.DataFile.Size,
+			size:        file.DataFile.FileSize,
 			modTime:     modTime,
 			md5:         file.DataFile.MD5,
 			contentType: file.DataFile.ContentType,
+		}
+		if file.DataFile.OriginalFileName != "" {
+			entry.name = file.DataFile.OriginalFileName
+			entry.remote = path.Join(file.DirectoryLabel, file.DataFile.OriginalFileName)
+			entry.size = file.DataFile.OriginalFileSize
+			entry.contentType = file.DataFile.OriginalFileFormat
 		}
 		entries = append(entries, entry)
 	}
@@ -147,9 +153,12 @@ type dataverseFile struct {
 }
 
 type dataverseDataFile struct {
-	ID          int64  `json:"id"`
-	Filename    string `json:"filename"`
-	ContentType string `json:"contentType"`
-	Size        int64  `json:"filesize"`
-	MD5         string `json:"md5"`
+	ID                 int64  `json:"id"`
+	Filename           string `json:"filename"`
+	ContentType        string `json:"contentType"`
+	FileSize           int64  `json:"filesize"`
+	OriginalFileFormat string `json:"originalFileFormat"`
+	OriginalFileSize   int64  `json:"originalFileSize"`
+	OriginalFileName   string `json:"originalFileName"`
+	MD5                string `json:"md5"`
 }
