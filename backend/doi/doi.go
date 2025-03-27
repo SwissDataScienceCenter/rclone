@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rclone/rclone/backend/doi/api"
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/config/configstruct"
@@ -44,15 +45,18 @@ func init() {
 			Required: true,
 		}, {
 			Name: fs.ConfigProvider,
-			Help: "DOI provider.",
+			Help: `DOI provider.
+
+The DOI provider can be set when rclone does not automatically recognize a supported DOI provider.`,
 			Examples: []fs.OptionExample{{
-				Value: "Zenodo",
+				Value: string(Zenodo),
 				Help:  "Zenodo",
 			}, {
-				Value: "Dataverse",
+				Value: string(Dataverse),
 				Help:  "Dataverse",
 			}},
 			Required: false,
+			Advanced: true,
 		}},
 	}
 	fs.Register(fsi)
@@ -87,14 +91,16 @@ type Fs struct {
 	endpointURL string         // endpoint as a string
 	srv         *rest.Client   // the connection to the server
 	// TODO: add a pacer (from fs) for HTTP requests
+
 	cache *cache.Cache // a cache for the remote metadata
 }
 
 // Object is a remote object that has been stat'd (so it exists, but is not necessarily open for reading)
 type Object struct {
-	fs   *Fs    // what this object is part of
-	name string // the name of the file
-	// TODO: use `remote` field?
+	fs *Fs // what this object is part of
+	// TODO: remove `name` field
+
+	name        string    // the name of the file
 	remote      string    // the remote path
 	contentURL  string    // the URL where the contents of the file can be downloaded
 	size        int64     // size of the object
@@ -113,25 +119,6 @@ func statusError(res *http.Response, err error) error {
 		return fmt.Errorf("HTTP Error: %s", res.Status)
 	}
 	return nil
-}
-
-type doiResolverResponse struct {
-	ResponseCode int                        `json:"responseCode"`
-	Handle       string                     `json:"handle"`
-	Values       []doiResolverResponseValue `json:"values"`
-}
-
-type doiResolverResponseValue struct {
-	Index     int                          `json:"index"`
-	Type      string                       `json:"type"`
-	Data      doiResolverResponseValueData `json:"data"`
-	Ttl       int                          `json:"ttl"`
-	Timestamp string                       `json:"timestamp"`
-}
-
-type doiResolverResponseValueData struct {
-	Format string `json:"format"`
-	Value  any    `json:"value"`
 }
 
 // Parse the input string as a DOI
@@ -165,7 +152,7 @@ func resolveDoiURL(ctx context.Context, client *http.Client, opt *Options) (doiU
 		Path:       "/handles/" + doi,
 		Parameters: params,
 	}
-	var result doiResolverResponse
+	var result api.DoiResolverResponse
 	_, err = doiRestClient.CallJSON(ctx, &opts, nil, &result)
 	if err != nil {
 		return nil, err
@@ -200,11 +187,11 @@ func resolveEndpoint(ctx context.Context, client *http.Client, opt *Options) (pr
 
 	hostname := strings.ToLower(resolvedURL.Hostname())
 
-	if hostname == "dataverse.harvard.edu" {
+	// TODO: improve dataverse detection
+	if hostname == "dataverse.harvard.edu" || opt.Provider == string(Dataverse) {
 		return resolveDataverseEndpoint(resolvedURL)
 	}
-
-	if hostname == "zenodo.org" || strings.HasSuffix(hostname, ".zenodo.org") {
+	if hostname == "zenodo.org" || strings.HasSuffix(hostname, ".zenodo.org") || opt.Provider == string(Zenodo) {
 		return resolveZenodoEndpoint(ctx, client, resolvedURL, opt.Doi)
 	}
 
