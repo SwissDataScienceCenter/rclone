@@ -80,7 +80,6 @@ type Fs struct {
 	endpointURL string         // endpoint as a string
 	srv         *rest.Client   // the connection to the server
 	// TODO: add a pacer (from fs) for HTTP requests
-	// TODO: use a cache (from lib/cache) to keep the dataset files listing
 	cache *cache.Cache // a cache for the remote metadata
 }
 
@@ -450,35 +449,24 @@ func (o *Object) Storable() bool {
 // Open a remote http file object for reading. Seek is supported
 func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.ReadCloser, err error) {
 	fs.FixRangeOption(options, o.size)
-
-	// url := o.contentURL
-	// fs.Logf(nil, "Open URL = %s", url)
-	// req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("Open failed: %w", err)
-	// }
-
-	// // Add optional headers
-	// for k, v := range fs.OpenOptionHeaders(options) {
-	// 	fs.Logf(o, "header %s = %s", k, v)
-	// 	req.Header.Add(k, v)
-	// }
-
-	// Do the request
-	// res, err := o.fs.httpClient.Do(req)
 	opts := rest.Opts{
 		Method:  "GET",
 		RootURL: o.contentURL,
 		Options: options,
 	}
+	fs.Logf(o, "Open with URL = '%s'", o.contentURL)
+	for _, opt := range opts.Options {
+		k, v := opt.Header()
+		fs.Logf(o, "header '%s' = '%s'", k, v)
+	}
 	res, err := o.fs.srv.Call(ctx, &opts)
-	// err = statusError(res, err)
 	if err != nil {
+		fs.Logf(o, "Open failed: '%s'", res.Status)
+		fs.Logf(o, "Open failed: '%s'", err.Error())
 		return nil, fmt.Errorf("Open failed: %w", err)
 	}
-	if err = o.decodeMetadata(res); err != nil {
-		return nil, fmt.Errorf("decodeMetadata failed: %w", err)
-	}
+	fs.Logf(o, "Open response: '%s'", res.Status)
+	fs.Logf(o, "Open response: '%v'", res.Header)
 	return res.Body, nil
 }
 
@@ -490,37 +478,6 @@ func (o *Object) Update(ctx context.Context, in io.Reader, src fs.ObjectInfo, op
 // MimeType of an Object if known, "" otherwise
 func (o *Object) MimeType(ctx context.Context) string {
 	return o.contentType
-}
-
-// // head sends a HEAD request to update info fields in the Object
-// func (o *Object) head(ctx context.Context) error {
-// 	url := o.contentURL
-// 	fs.Logf(nil, "HEAD URL = %s", url)
-// 	req, err := http.NewRequestWithContext(ctx, "HEAD", url, nil)
-// 	if err != nil {
-// 		return fmt.Errorf("stat failed: %w", err)
-// 	}
-// 	res, err := o.fs.httpClient.Do(req)
-// 	if err == nil && res.StatusCode == http.StatusNotFound {
-// 		return fs.ErrorObjectNotFound
-// 	}
-// 	err = statusError(res, err)
-// 	if err != nil {
-// 		return fmt.Errorf("failed to stat: %w", err)
-// 	}
-// 	return o.decodeMetadata(res)
-// }
-
-// decodeMetadata updates info fields in the Object according to HTTP response headers
-func (o *Object) decodeMetadata(res *http.Response) error {
-	t, err := http.ParseTime(res.Header.Get("Last-Modified"))
-	if err != nil {
-		t = timeUnset
-	}
-	o.modTime = t
-	o.contentType = res.Header.Get("Content-Type")
-	o.size = rest.ParseSizeFromHeaders(res.Header)
-	return nil
 }
 
 // Check the interfaces are satisfied
