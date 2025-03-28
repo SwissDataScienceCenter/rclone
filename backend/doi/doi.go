@@ -473,6 +473,23 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 	}
 	fs.Logf(o, "Open response: '%s'", res.Status)
 	fs.Logf(o, "Open response: '%v'", res.Header)
+
+	// Handle non-compliant redirects
+	if res.Header.Get("Location") != "" {
+		newURL, err := res.Location()
+		if err == nil {
+			opts.RootURL = newURL.String()
+			res, err = o.fs.srv.Call(ctx, &opts)
+			if err != nil {
+				fs.Logf(o, "Open failed: '%s'", res.Status)
+				fs.Logf(o, "Open failed: '%s'", err.Error())
+				return nil, fmt.Errorf("Open failed: %w", err)
+			}
+			fs.Logf(o, "Open response: '%s'", res.Status)
+			fs.Logf(o, "Open response: '%v'", res.Header)
+		}
+	}
+
 	return res.Body, nil
 }
 
