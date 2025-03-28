@@ -1,4 +1,5 @@
 // Package doi provides a filesystem interface for digital objects identified by DOIs.
+//
 // See: https://www.doi.org/the-identifier/what-is-a-doi/
 package doi
 
@@ -54,6 +55,9 @@ The DOI provider can be set when rclone does not automatically recognize a suppo
 			}, {
 				Value: string(Dataverse),
 				Help:  "Dataverse",
+			}, {
+				Value: string(Invenio),
+				Help:  "Invenio",
 			}},
 			Required: false,
 			Advanced: true,
@@ -70,6 +74,8 @@ var (
 	Zenodo Provider = "zenodo"
 	// Dataverse, see https://dataverse.harvard.edu
 	Dataverse Provider = "dataverse"
+	// InvenioDRM, see https://inveniordm.docs.cern.ch
+	Invenio Provider = "invenio"
 )
 
 // Options defines the configuration for this backend
@@ -194,6 +200,9 @@ func resolveEndpoint(ctx context.Context, client *http.Client, opt *Options) (pr
 	if hostname == "zenodo.org" || strings.HasSuffix(hostname, ".zenodo.org") || opt.Provider == string(Zenodo) {
 		return resolveZenodoEndpoint(ctx, client, resolvedURL, opt.Doi)
 	}
+	if opt.Provider == string(Invenio) {
+		return resolveInvenioEndpoint(ctx, client, resolvedURL, opt.Doi)
+	}
 
 	return "", nil, fmt.Errorf("provider '%s' is not supported", resolvedURL.Hostname())
 }
@@ -206,9 +215,6 @@ func (f *Fs) httpConnection(ctx context.Context, opt *Options) (isFile bool, err
 	if err != nil {
 		return false, err
 	}
-
-	// Note that we assume that there are no subfolders for DOI objects
-	// isFile = f.root != ""
 
 	// Update f with the new parameters
 	f.srv = rest.NewClient(client).SetRoot(endpoint.ResolveReference(&url.URL{Path: "/"}).String())
@@ -232,6 +238,8 @@ func (f *Fs) httpConnection(ctx context.Context, opt *Options) (isFile bool, err
 			}
 		}
 	case Zenodo:
+		isFile = f.root != ""
+	case Invenio:
 		isFile = f.root != ""
 	}
 
@@ -341,6 +349,8 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 		entries, err = f.listDataverseDoiFiles(ctx)
 	case Zenodo:
 		entries, err = f.listZenodoDoiFiles(ctx)
+	case Invenio:
+		entries, err = f.listZenodoDoiFiles(ctx)
 	default:
 		err = fmt.Errorf("provider type '%s' not supported", f.provider)
 	}
@@ -372,6 +382,8 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 	case Dataverse:
 		return f.listDataverse(ctx, dir)
 	case Zenodo:
+		return f.listZenodo(ctx, dir)
+	case Invenio:
 		return f.listZenodo(ctx, dir)
 	default:
 		return nil, fmt.Errorf("provider type '%s' not supported", f.provider)

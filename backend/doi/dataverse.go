@@ -1,3 +1,5 @@
+// Implementation for Dataverse
+
 package doi
 
 import (
@@ -8,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rclone/rclone/backend/doi/api"
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/lib/rest"
 )
@@ -36,6 +39,7 @@ func (f *Fs) listDataverse(ctx context.Context, dir string) (entries fs.DirEntri
 		return nil, fmt.Errorf("error listing %q: %w", dir, err)
 	}
 
+	// TODO: consider simplifying this logic and using dircache.SplitPath()
 	fullDir := strings.TrimRight(path.Join(f.root, dir), "/") + "/"
 	if fullDir == "/" {
 		fullDir = ""
@@ -70,22 +74,19 @@ func (f *Fs) listDataverseDoiFiles(ctx context.Context) (entries []*Object, err 
 	// Use the cache if populated
 	cachedEntries, found := f.cache.GetMaybe("files")
 	if found {
-		// fs.Logf(f, "cache hit, '%s'", cachedEntries)
 		parsedEntries, ok := cachedEntries.([]Object)
 		if ok {
 			for _, entry := range parsedEntries {
-				// fs.Logf(f, "cache hit, entry = '%v'", entry)
 				newEntry := entry
 				entries = append(entries, &newEntry)
 			}
-			// fs.Logf(f, "cache hit, entries = '%v'", entries)
 			return entries, nil
 		}
 	}
 
 	filesURL := f.endpoint
 	fs.Logf(f, "filesURL = '%s'", filesURL.String())
-	var result dataverseDataset
+	var result api.DataverseDatasetResponse
 	opts := rest.Opts{
 		Method:     "GET",
 		Path:       strings.TrimLeft(filesURL.EscapedPath(), "/"),
@@ -132,33 +133,4 @@ func (f *Fs) listDataverseDoiFiles(ctx context.Context) (entries []*Object, err 
 	}
 	f.cache.Put("files", cacheEntries)
 	return entries, nil
-}
-
-type dataverseDataset struct {
-	Data dataverseDatasetData `json:"data"`
-}
-
-type dataverseDatasetData struct {
-	LatestVersion dataverseDatasetLatestVersion `json:"latestVersion"`
-}
-
-type dataverseDatasetLatestVersion struct {
-	LastUpdateTime string          `json:"lastUpdateTime"`
-	Files          []dataverseFile `json:"files"`
-}
-
-type dataverseFile struct {
-	DirectoryLabel string            `json:"directoryLabel"`
-	DataFile       dataverseDataFile `json:"dataFile"`
-}
-
-type dataverseDataFile struct {
-	ID                 int64  `json:"id"`
-	Filename           string `json:"filename"`
-	ContentType        string `json:"contentType"`
-	FileSize           int64  `json:"filesize"`
-	OriginalFileFormat string `json:"originalFileFormat"`
-	OriginalFileSize   int64  `json:"originalFileSize"`
-	OriginalFileName   string `json:"originalFileName"`
-	MD5                string `json:"md5"`
 }

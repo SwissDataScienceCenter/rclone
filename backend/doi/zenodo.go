@@ -1,3 +1,5 @@
+// Implementation for Zenodo
+
 package doi
 
 import (
@@ -26,6 +28,8 @@ func resolveZenodoEndpoint(ctx context.Context, client *http.Client, resolvedURL
 
 	recordID := match[1]
 	endpointURL := resolvedURL.ResolveReference(&url.URL{Path: "/api/records/" + recordID})
+
+	// TODO: use the rest client
 
 	// Do the request
 	req, err := http.NewRequestWithContext(ctx, "GET", endpointURL.String(), nil)
