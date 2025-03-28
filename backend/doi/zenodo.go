@@ -94,11 +94,11 @@ func (f *Fs) listZenodoDoiFiles(ctx context.Context) (entries []*Object, err err
 	// Use the cache if populated
 	cachedEntries, found := f.cache.GetMaybe("files")
 	if found {
-		fs.Logf(f, "cache hit")
 		parsedEntries, ok := cachedEntries.([]Object)
 		if ok {
 			for _, entry := range parsedEntries {
-				entries = append(entries, &entry)
+				newEntry := entry
+				entries = append(entries, &newEntry)
 			}
 			return entries, nil
 		}
