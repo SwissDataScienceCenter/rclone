@@ -46,7 +46,7 @@ func resolveInvenioEndpoint(ctx context.Context, client *http.Client, resolvedUR
 	}
 
 	if linksetURL != nil {
-		endpoint, err = checkInvenioApiURL(ctx, restClient, linksetURL)
+		endpoint, err = checkInvenioAPIURL(ctx, restClient, linksetURL)
 		if err == nil {
 			return Invenio, endpoint, nil
 		}
@@ -63,7 +63,7 @@ func resolveInvenioEndpoint(ctx context.Context, client *http.Client, resolvedUR
 		guessedURL := res.Request.URL.ResolveReference(&url.URL{
 			Path: "/api/records/" + recordID,
 		})
-		endpoint, err = checkInvenioApiURL(ctx, restClient, guessedURL)
+		endpoint, err = checkInvenioAPIURL(ctx, restClient, guessedURL)
 		if err == nil {
 			return Invenio, endpoint, nil
 		}
@@ -73,7 +73,7 @@ func resolveInvenioEndpoint(ctx context.Context, client *http.Client, resolvedUR
 	return "", nil, fmt.Errorf("could not resolve the Invenio API endpoint for '%s'", resolvedURL.String())
 }
 
-func checkInvenioApiURL(ctx context.Context, client *rest.Client, resolvedURL *url.URL) (endpoint *url.URL, err error) {
+func checkInvenioAPIURL(ctx context.Context, client *rest.Client, resolvedURL *url.URL) (endpoint *url.URL, err error) {
 	opts := rest.Opts{
 		Method:  "GET",
 		RootURL: resolvedURL.String(),

@@ -20,12 +20,12 @@ func resolveDataverseEndpoint(resolvedURL *url.URL) (provider Provider, endpoint
 	fs.Logf(nil, "dataverseURL = %s", resolvedURL.String())
 
 	queryValues := resolvedURL.Query()
-	persistentId := queryValues.Get("persistentId")
+	persistentID := queryValues.Get("persistentId")
 
-	fs.Logf(nil, "persistentId = %s", persistentId)
+	fs.Logf(nil, "persistentId = %s", persistentID)
 
 	query := url.Values{}
-	query.Add("persistentId", persistentId)
+	query.Add("persistentId", persistentID)
 	endpointURL := resolvedURL.ResolveReference(&url.URL{Path: "/api/datasets/:persistentId/", RawQuery: query.Encode()})
 
 	fs.Logf(nil, "endpointURL = %s", endpointURL)

@@ -27,7 +27,7 @@ import (
 // the URL of the DOI resolver
 //
 // Reference: https://www.doi.org/the-identifier/resources/factsheets/doi-resolution-documentation
-const doiResolverApiURL = "https://doi.org/api"
+const doiResolverAPIURL = "https://doi.org/api"
 
 var (
 	errorReadOnly = errors.New("doi remotes are read only")
@@ -70,11 +70,11 @@ The DOI provider can be set when rclone does not automatically recognize a suppo
 type Provider string
 
 var (
-	// Zenodo, see https://zenodo.org
+	// Zenodo provider, see https://zenodo.org
 	Zenodo Provider = "zenodo"
-	// Dataverse, see https://dataverse.harvard.edu
+	// Dataverse provider, see https://dataverse.harvard.edu
 	Dataverse Provider = "dataverse"
-	// InvenioDRM, see https://inveniordm.docs.cern.ch
+	// Invenio provider, see https://inveniordm.docs.cern.ch
 	Invenio Provider = "invenio"
 )
 
@@ -135,7 +135,7 @@ func parseDoi(doi string) string {
 // Reference: https://www.doi.org/the-identifier/resources/factsheets/doi-resolution-documentation
 func resolveDoiURL(ctx context.Context, client *http.Client, opt *Options) (doiURL *url.URL, err error) {
 	doi := parseDoi(opt.Doi)
-	doiRestClient := rest.NewClient(client).SetRoot(doiResolverApiURL)
+	doiRestClient := rest.NewClient(client).SetRoot(doiResolverAPIURL)
 	params := url.Values{}
 	params.Add("index", "1")
 	opts := rest.Opts{
