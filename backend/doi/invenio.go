@@ -19,7 +19,7 @@ import (
 var invenioRecordRegex = regexp.MustCompile(`\/records?\/(.+)`)
 
 // Resolve the main API endpoint for a DOI hosted on an InvenioDRM installation
-func resolveInvenioEndpoint(ctx context.Context, client *http.Client, resolvedURL *url.URL, doi string) (provider Provider, endpoint *url.URL, err error) {
+func resolveInvenioEndpoint(ctx context.Context, client *http.Client, resolvedURL *url.URL) (provider Provider, endpoint *url.URL, err error) {
 	fs.Logf(nil, "invenioURL = %s", resolvedURL.String())
 
 	restClient := rest.NewClient(client)
@@ -55,7 +55,9 @@ func resolveInvenioEndpoint(ctx context.Context, client *http.Client, resolvedUR
 
 	// If there is no linkset header, try to grab the record ID from the URL
 	recordID := ""
-	match := invenioRecordRegex.FindStringSubmatch(resolvedURL.EscapedPath())
+	resURL := res.Request.URL
+	fs.Logf(nil, "resURL = %s", resURL.String())
+	match := invenioRecordRegex.FindStringSubmatch(resURL.EscapedPath())
 	if match != nil {
 		recordID = match[1]
 		guessedURL := res.Request.URL.ResolveReference(&url.URL{

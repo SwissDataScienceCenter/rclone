@@ -186,7 +186,7 @@ func resolveEndpoint(ctx context.Context, client *http.Client, opt *Options) (pr
 		return resolveZenodoEndpoint(ctx, client, resolvedURL, opt.Doi)
 	}
 	if opt.Provider == string(Invenio) {
-		return resolveInvenioEndpoint(ctx, client, resolvedURL, opt.Doi)
+		return resolveInvenioEndpoint(ctx, client, resolvedURL)
 	}
 
 	return "", nil, fmt.Errorf("provider '%s' is not supported", resolvedURL.Hostname())
@@ -326,7 +326,6 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 	fs.Logf(nil, "remote = %s", remote)
 
-	// TODO: Can we avoid listing the files?
 	var entries []*Object
 	var err error
 	switch f.provider {
