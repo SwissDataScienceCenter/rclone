@@ -2,7 +2,7 @@
 
 package api
 
-// DataverseDatasetResponse is returned by the Dataverse API
+// DataverseDatasetResponse is returned by the Dataverse dataset API
 type DataverseDatasetResponse struct {
 	Status string           `json:"status"`
 	Data   DataverseDataset `json:"data"`

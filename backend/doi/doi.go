@@ -348,9 +348,9 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 	case Dataverse:
 		entries, err = f.listDataverseDoiFiles(ctx)
 	case Zenodo:
-		entries, err = f.listZenodoDoiFiles(ctx)
+		entries, err = f.listInvevioDoiFiles(ctx)
 	case Invenio:
-		entries, err = f.listZenodoDoiFiles(ctx)
+		entries, err = f.listInvevioDoiFiles(ctx)
 	default:
 		err = fmt.Errorf("provider type '%s' not supported", f.provider)
 	}
@@ -382,9 +382,9 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 	case Dataverse:
 		return f.listDataverse(ctx, dir)
 	case Zenodo:
-		return f.listZenodo(ctx, dir)
+		return f.listInvenio(ctx, dir)
 	case Invenio:
-		return f.listZenodo(ctx, dir)
+		return f.listInvenio(ctx, dir)
 	default:
 		return nil, fmt.Errorf("provider type '%s' not supported", f.provider)
 	}
