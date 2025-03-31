@@ -15,11 +15,11 @@ type DoiResolverResponseValue struct {
 	Index     int                          `json:"index"`
 	Type      string                       `json:"type"`
 	Data      DoiResolverResponseValueData `json:"data"`
-	Ttl       int                          `json:"ttl"`
+	TTL       int                          `json:"ttl"`
 	Timestamp string                       `json:"timestamp"`
 }
 
-// DoiResolverResponseValue is the data held in a handle value
+// DoiResolverResponseValueData is the data held in a handle value
 type DoiResolverResponseValueData struct {
 	Format string `json:"format"`
 	Value  any    `json:"value"`

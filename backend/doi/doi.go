@@ -103,28 +103,13 @@ type Fs struct {
 
 // Object is a remote object that has been stat'd (so it exists, but is not necessarily open for reading)
 type Object struct {
-	fs *Fs // what this object is part of
-	// TODO: remove `name` field
-
-	name        string    // the name of the file
+	fs          *Fs       // what this object is part of
 	remote      string    // the remote path
 	contentURL  string    // the URL where the contents of the file can be downloaded
 	size        int64     // size of the object
 	modTime     time.Time // modification time of the object
 	contentType string    // content type of the object
 	md5         string    // MD5 hash of the object content
-}
-
-// statusError returns an error if the response contained an error
-func statusError(res *http.Response, err error) error {
-	if err != nil {
-		return err
-	}
-	if res.StatusCode < 200 || res.StatusCode > 299 {
-		_ = res.Body.Close()
-		return fmt.Errorf("HTTP Error: %s", res.Status)
-	}
-	return nil
 }
 
 // Parse the input string as a DOI

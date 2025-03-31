@@ -8,24 +8,24 @@ type DataverseDatasetResponse struct {
 	Data   DataverseDataset `json:"data"`
 }
 
-// Representation of a dataset
+// DataverseDataset is the representation of a dataset
 type DataverseDataset struct {
 	LatestVersion DataverseDatasetVersion `json:"latestVersion"`
 }
 
-// Representation of a dataset version
+// DataverseDatasetVersion is the representation of a dataset version
 type DataverseDatasetVersion struct {
 	LastUpdateTime string          `json:"lastUpdateTime"`
 	Files          []DataverseFile `json:"files"`
 }
 
-// Representation of a file found in a dataset
+// DataverseFile is the representation of a file found in a dataset
 type DataverseFile struct {
 	DirectoryLabel string            `json:"directoryLabel"`
 	DataFile       DataverseDataFile `json:"dataFile"`
 }
 
-// File metadata details
+// DataverseDataFile represents file metadata details
 type DataverseDataFile struct {
 	ID                 int64  `json:"id"`
 	Filename           string `json:"filename"`

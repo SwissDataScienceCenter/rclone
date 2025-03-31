@@ -68,7 +68,7 @@ func resolveInvenioEndpoint(ctx context.Context, client *http.Client, resolvedUR
 		fs.Logf(nil, "guessing the URL failed: %s", err.Error())
 	}
 
-	return "", nil, fmt.Errorf("TODO: resolveInvenioEndpoint()")
+	return "", nil, fmt.Errorf("could not resolve the Invenio API endpoint for '%s'", resolvedURL.String())
 }
 
 func checkInvenioApiURL(ctx context.Context, client *rest.Client, resolvedURL *url.URL) (endpoint *url.URL, err error) {
@@ -137,7 +137,6 @@ func (f *Fs) listInvevioDoiFiles(ctx context.Context) (entries []*Object, err er
 		}
 		entry := &Object{
 			fs:          f,
-			name:        file.Key,
 			remote:      file.Key,
 			contentURL:  file.Links.Content,
 			size:        file.Size,

@@ -110,7 +110,6 @@ func (f *Fs) listDataverseDoiFiles(ctx context.Context) (entries []*Object, err 
 		contentURL := f.endpoint.ResolveReference(&url.URL{Path: contentURLPath, RawQuery: query.Encode()})
 		entry := &Object{
 			fs:          f,
-			name:        file.DataFile.Filename,
 			remote:      path.Join(file.DirectoryLabel, file.DataFile.Filename),
 			contentURL:  contentURL.String(),
 			size:        file.DataFile.FileSize,
@@ -119,7 +118,6 @@ func (f *Fs) listDataverseDoiFiles(ctx context.Context) (entries []*Object, err 
 			contentType: file.DataFile.ContentType,
 		}
 		if file.DataFile.OriginalFileName != "" {
-			entry.name = file.DataFile.OriginalFileName
 			entry.remote = path.Join(file.DirectoryLabel, file.DataFile.OriginalFileName)
 			entry.size = file.DataFile.OriginalFileSize
 			entry.contentType = file.DataFile.OriginalFileFormat
