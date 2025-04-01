@@ -12,6 +12,7 @@ import (
 
 	"github.com/rclone/rclone/backend/doi/api"
 	"github.com/rclone/rclone/fs"
+	"github.com/rclone/rclone/lib/dircache"
 	"github.com/rclone/rclone/lib/rest"
 )
 
@@ -38,33 +39,37 @@ func (f *Fs) listDataverse(ctx context.Context, dir string) (entries fs.DirEntri
 	if err != nil {
 		return nil, fmt.Errorf("error listing %q: %w", dir, err)
 	}
-
-	// TODO: consider simplifying this logic and using dircache.SplitPath()
-	fullDir := strings.TrimRight(path.Join(f.root, dir), "/") + "/"
-	if fullDir == "/" {
-		fullDir = ""
-	}
-	dirPaths := map[string]bool{}
+	fullDir := strings.Trim(path.Join(f.root, dir), "/")
+	dirPaths := map[string]*fs.Dir{}
 	for _, entry := range fileEntries {
-		if fullDir != "" && !strings.HasPrefix(entry.remote, fullDir) {
+		// First, filter out files not in `fullDir`
+		fileDir, _ := dircache.SplitPath(entry.remote)
+		if !strings.HasPrefix(fileDir, fullDir) {
 			continue
 		}
+		// Then, find entries in subfolers
 		remotePath := entry.remote
-		if fullDir != "" {
-			remotePath = strings.TrimLeft(strings.TrimPrefix(remotePath, fullDir), "/")
+		if f.root != "" {
+			remotePath = strings.TrimLeft(strings.TrimPrefix(remotePath, f.root), "/")
 		}
-		parts := strings.SplitN(remotePath, "/", 2)
-		if len(parts) == 1 {
+		fileDir, _ = dircache.SplitPath(remotePath)
+		if fileDir == dir {
 			newEntry := *entry
-			newEntry.remote = path.Join(dir, remotePath)
+			newEntry.remote = remotePath
 			entries = append(entries, &newEntry)
-		} else {
-			dirPaths[parts[0]] = true
+		} else if !strings.Contains(fileDir, "/") {
+			dirEntry, found := dirPaths[fileDir]
+			if found {
+				size := dirEntry.Items() + 1
+				dirEntry.SetItems(size)
+			} else {
+				dirPaths[fileDir] = fs.NewDir(fileDir, time.Time{})
+				dirPaths[fileDir].SetItems(1)
+			}
 		}
 	}
-	for dirPath := range dirPaths {
-		entry := fs.NewDir(path.Join(dir, dirPath), time.Time{})
-		entries = append(entries, entry)
+	for _, dirEntry := range dirPaths {
+		entries = append(entries, dirEntry)
 	}
 	return entries, nil
 }
