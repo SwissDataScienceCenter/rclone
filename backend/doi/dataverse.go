@@ -40,7 +40,7 @@ func (f *Fs) listDataverse(ctx context.Context, dir string) (entries fs.DirEntri
 		return nil, fmt.Errorf("error listing %q: %w", dir, err)
 	}
 	fullDir := strings.Trim(path.Join(f.root, dir), "/")
-	dirPaths := map[string]*fs.Dir{}
+	dirPaths := map[string]bool{}
 	for _, entry := range fileEntries {
 		// First, filter out files not in `fullDir`
 		fileDir, _ := dircache.SplitPath(entry.remote)
@@ -58,18 +58,12 @@ func (f *Fs) listDataverse(ctx context.Context, dir string) (entries fs.DirEntri
 			newEntry.remote = remotePath
 			entries = append(entries, &newEntry)
 		} else if !strings.Contains(fileDir, "/") {
-			dirEntry, found := dirPaths[fileDir]
-			if found {
-				size := dirEntry.Items() + 1
-				dirEntry.SetItems(size)
-			} else {
-				dirPaths[fileDir] = fs.NewDir(fileDir, time.Time{})
-				dirPaths[fileDir].SetItems(1)
-			}
+			dirPaths[fileDir] = true
 		}
 	}
-	for _, dirEntry := range dirPaths {
-		entries = append(entries, dirEntry)
+	for dirPath := range dirPaths {
+		entry := fs.NewDir(path.Join(dir, dirPath), time.Time{})
+		entries = append(entries, entry)
 	}
 	return entries, nil
 }
