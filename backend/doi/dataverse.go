@@ -12,7 +12,6 @@ import (
 
 	"github.com/rclone/rclone/backend/doi/api"
 	"github.com/rclone/rclone/fs"
-	"github.com/rclone/rclone/lib/dircache"
 	"github.com/rclone/rclone/lib/rest"
 )
 
@@ -39,30 +38,33 @@ func (f *Fs) listDataverse(ctx context.Context, dir string) (entries fs.DirEntri
 	if err != nil {
 		return nil, fmt.Errorf("error listing %q: %w", dir, err)
 	}
-	fullDir := strings.Trim(path.Join(f.root, dir), "/")
+
+	fullDir := path.Join(f.root, dir)
+	if fullDir != "" {
+		fullDir = fullDir + "/"
+	}
 	dirPaths := map[string]bool{}
 	for _, entry := range fileEntries {
 		// First, filter out files not in `fullDir`
-		fileDir, _ := dircache.SplitPath(entry.remote)
-		if !strings.HasPrefix(fileDir, fullDir) {
+		if !strings.HasPrefix(entry.remote, fullDir) {
 			continue
 		}
 		// Then, find entries in subfolers
 		remotePath := entry.remote
-		if f.root != "" {
-			remotePath = strings.TrimLeft(strings.TrimPrefix(remotePath, f.root), "/")
+		if fullDir != "" {
+			remotePath = strings.TrimLeft(strings.TrimPrefix(remotePath, fullDir), "/")
 		}
-		fileDir, _ = dircache.SplitPath(remotePath)
-		if fileDir == dir {
+		parts := strings.SplitN(remotePath, "/", 2)
+		if len(parts) == 1 {
 			newEntry := *entry
-			newEntry.remote = remotePath
+			newEntry.remote = path.Join(dir, remotePath)
 			entries = append(entries, &newEntry)
-		} else if !strings.Contains(fileDir, "/") {
-			dirPaths[fileDir] = true
+		} else {
+			dirPaths[path.Join(dir, parts[0])] = true
 		}
 	}
 	for dirPath := range dirPaths {
-		entry := fs.NewDir(path.Join(dir, dirPath), time.Time{})
+		entry := fs.NewDir(dirPath, time.Time{})
 		entries = append(entries, entry)
 	}
 	return entries, nil
