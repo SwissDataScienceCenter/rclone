@@ -2,14 +2,20 @@
 
 package api
 
-// InvenioRecordResponse si the representation of a record stored in InvenioDRM
+// InvenioRecordResponse is the representation of a record stored in InvenioDRM
 type InvenioRecordResponse struct {
-	Links InvenioRecordResponseLinks `json:"links"`
+	Links    InvenioRecordResponseLinks `json:"links"`
+	Metadata InvenioRecordMetadata      `json:"metadata"`
 }
 
-// InvenioRecordResponseLinks represents of a record's links
+// InvenioRecordResponseLinks represents a record's links
 type InvenioRecordResponseLinks struct {
 	Self string `json:"self"`
+}
+
+// InvenioRecordMetadata respresents is the representation of a record's metadata
+type InvenioRecordMetadata struct {
+	Title string `json:"title"`
 }
 
 // InvenioFilesResponse is the representation of a record's files

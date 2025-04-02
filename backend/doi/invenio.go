@@ -165,3 +165,20 @@ func (f *Fs) listInvevioDoiFiles(ctx context.Context) (entries []*Object, err er
 	f.cache.Put("files", cacheEntries)
 	return entries, nil
 }
+
+func (f *Fs) getMetadataInvenio(ctx context.Context) (metadata *api.InvenioRecordResponse, err error) {
+	metadataURL := f.endpoint
+	var result api.InvenioRecordResponse
+	opts := rest.Opts{
+		Method:  "GET",
+		RootURL: metadataURL.String(),
+	}
+	err = f.pacer.Call(func() (bool, error) {
+		res, err := f.srv.CallJSON(ctx, &opts, nil, &result)
+		return shouldRetry(ctx, res, err)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}

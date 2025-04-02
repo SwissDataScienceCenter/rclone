@@ -140,3 +140,20 @@ func (f *Fs) listDataverseDoiFiles(ctx context.Context) (entries []*Object, err 
 	f.cache.Put("files", cacheEntries)
 	return entries, nil
 }
+
+func (f *Fs) getMetadataDataverse(ctx context.Context) (metadata *api.DataverseDatasetResponse, err error) {
+	metadataURL := f.endpoint
+	var result api.DataverseDatasetResponse
+	opts := rest.Opts{
+		Method:  "GET",
+		RootURL: metadataURL.String(),
+	}
+	err = f.pacer.Call(func() (bool, error) {
+		res, err := f.srv.CallJSON(ctx, &opts, nil, &result)
+		return shouldRetry(ctx, res, err)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}

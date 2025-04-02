@@ -237,9 +237,7 @@ func (f *Fs) httpConnection(ctx context.Context, opt *Options) (isFile bool, err
 				break
 			}
 		}
-	case Zenodo:
-		isFile = f.root != ""
-	case Invenio:
+	case Invenio, Zenodo:
 		isFile = f.root != ""
 	}
 
@@ -368,9 +366,7 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 	switch f.provider {
 	case Dataverse:
 		entries, err = f.listDataverseDoiFiles(ctx)
-	case Zenodo:
-		entries, err = f.listInvevioDoiFiles(ctx)
-	case Invenio:
+	case Invenio, Zenodo:
 		entries, err = f.listInvevioDoiFiles(ctx)
 	default:
 		err = fmt.Errorf("provider type '%s' not supported", f.provider)
@@ -402,9 +398,7 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 	switch f.provider {
 	case Dataverse:
 		return f.listDataverse(ctx, dir)
-	case Zenodo:
-		return f.listInvenio(ctx, dir)
-	case Invenio:
+	case Invenio, Zenodo:
 		return f.listInvenio(ctx, dir)
 	default:
 		return nil, fmt.Errorf("provider type '%s' not supported", f.provider)
@@ -532,13 +526,22 @@ func (o *Object) MimeType(ctx context.Context) string {
 }
 
 var commandHelp = []fs.CommandHelp{{
-	Name:  "show-metadata",
+	Name:  "metadata",
 	Short: "Show metadata about the DOI.",
 	Long: `This command returns the JSON representation of the DOI.
 
-    rclone backend show-medatadata doi: 
+    rclone backend medatadata doi: 
 
 It returns a JSON object representing the DOI.
+`,
+}, {
+	Name:  "title",
+	Short: "Show the DOI title if available.",
+	Long: `This command returns the DOI title.
+
+    rclone backend title doi: 
+
+It returns a string representing the DOI title.
 `,
 }, {
 	Name:  "set",
@@ -573,8 +576,10 @@ It doesn't return anything.
 // otherwise it will be JSON encoded and shown to the user like that
 func (f *Fs) Command(ctx context.Context, name string, arg []string, opt map[string]string) (out interface{}, err error) {
 	switch name {
-	case "show-metadata":
+	case "metadata":
 		return f.ShowMetadata(ctx)
+	case "title":
+		return f.ShowTitle(ctx)
 	case "set":
 		newOpt := f.opt
 		err := configstruct.Set(configmap.Simple(opt), &newOpt)
@@ -612,7 +617,34 @@ func (f *Fs) ShowMetadata(ctx context.Context) (metadata interface{}, err error)
 	if err != nil {
 		return nil, err
 	}
-	return result, err
+	return result, nil
+}
+
+// ShowMetadata returns the title associated with the DOI
+func (f *Fs) ShowTitle(ctx context.Context) (title string, err error) {
+	switch f.provider {
+	case Dataverse:
+		metadata, err := f.getMetadataDataverse(ctx)
+		if err != nil {
+			return "", err
+		}
+		for _, field := range metadata.Data.LatestVersion.MetadataBlocks.Citation.Fields {
+			if strings.ToLower(field.TypeName) == "title" {
+				title, ok := field.Value.(string)
+				if ok {
+					return title, nil
+				}
+			}
+		}
+	case Invenio, Zenodo:
+		metadata, err := f.getMetadataInvenio(ctx)
+		if err != nil {
+			return "", err
+		}
+		return metadata.Metadata.Title, nil
+
+	}
+	return "<unknown title>", nil
 }
 
 // Check the interfaces are satisfied
