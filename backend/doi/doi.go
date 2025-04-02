@@ -18,16 +18,23 @@ import (
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/config/configstruct"
+	"github.com/rclone/rclone/fs/fserrors"
 	"github.com/rclone/rclone/fs/fshttp"
 	"github.com/rclone/rclone/fs/hash"
 	"github.com/rclone/rclone/lib/cache"
+	"github.com/rclone/rclone/lib/pacer"
 	"github.com/rclone/rclone/lib/rest"
 )
 
-// the URL of the DOI resolver
-//
-// Reference: https://www.doi.org/the-identifier/resources/factsheets/doi-resolution-documentation
-const doiResolverAPIURL = "https://doi.org/api"
+const (
+	// the URL of the DOI resolver
+	//
+	// Reference: https://www.doi.org/the-identifier/resources/factsheets/doi-resolution-documentation
+	doiResolverAPIURL = "https://doi.org/api"
+	minSleep          = 10 * time.Millisecond
+	maxSleep          = 2 * time.Second
+	decayConstant     = 2 // bigger for slower decay, exponential
+)
 
 var (
 	errorReadOnly = errors.New("doi remotes are read only")
@@ -88,7 +95,6 @@ type Options struct {
 type Fs struct {
 	name        string         // name of this remote
 	root        string         // the path we are working on
-	doi         string         // the parsed DOI
 	provider    Provider       // the DOI provider
 	features    *fs.Features   // optional features
 	opt         Options        // options for this backend
@@ -96,9 +102,8 @@ type Fs struct {
 	endpoint    *url.URL       // the main API endpoint for this remote
 	endpointURL string         // endpoint as a string
 	srv         *rest.Client   // the connection to the server
-	// TODO: add a pacer (from fs) for HTTP requests
-
-	cache *cache.Cache // a cache for the remote metadata
+	pacer       *fs.Pacer      // pacer for API calls
+	cache       *cache.Cache   // a cache for the remote metadata
 }
 
 // Object is a remote object that has been stat'd (so it exists, but is not necessarily open for reading)
@@ -133,18 +138,20 @@ func parseDoi(doi string) string {
 
 // Resolve a DOI to a URL
 // Reference: https://www.doi.org/the-identifier/resources/factsheets/doi-resolution-documentation
-func resolveDoiURL(ctx context.Context, client *http.Client, opt *Options) (doiURL *url.URL, err error) {
-	doi := parseDoi(opt.Doi)
-	doiRestClient := rest.NewClient(client).SetRoot(doiResolverAPIURL)
+func resolveDoiURL(ctx context.Context, srv *rest.Client, pacer *fs.Pacer, opt *Options) (doiURL *url.URL, err error) {
+	var result api.DoiResolverResponse
 	params := url.Values{}
 	params.Add("index", "1")
 	opts := rest.Opts{
 		Method:     "GET",
-		Path:       "/handles/" + doi,
+		RootURL:    doiResolverAPIURL,
+		Path:       "/handles/" + opt.Doi,
 		Parameters: params,
 	}
-	var result api.DoiResolverResponse
-	_, err = doiRestClient.CallJSON(ctx, &opts, nil, &result)
+	err = pacer.Call(func() (bool, error) {
+		res, err := srv.CallJSON(ctx, &opts, nil, &result)
+		return shouldRetry(ctx, res, err)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -170,8 +177,8 @@ func resolveDoiURL(ctx context.Context, client *http.Client, opt *Options) (doiU
 }
 
 // Resolve the passed configuration into a provider and enpoint
-func resolveEndpoint(ctx context.Context, client *http.Client, opt *Options) (provider Provider, endpoint *url.URL, err error) {
-	resolvedURL, err := resolveDoiURL(ctx, client, opt)
+func resolveEndpoint(ctx context.Context, srv *rest.Client, pacer *fs.Pacer, opt *Options) (provider Provider, endpoint *url.URL, err error) {
+	resolvedURL, err := resolveDoiURL(ctx, srv, pacer, opt)
 	if err != nil {
 		return "", nil, err
 	}
@@ -183,10 +190,10 @@ func resolveEndpoint(ctx context.Context, client *http.Client, opt *Options) (pr
 		return resolveDataverseEndpoint(resolvedURL)
 	}
 	if hostname == "zenodo.org" || strings.HasSuffix(hostname, ".zenodo.org") || opt.Provider == string(Zenodo) {
-		return resolveZenodoEndpoint(ctx, client, resolvedURL, opt.Doi)
+		return resolveZenodoEndpoint(ctx, srv, pacer, resolvedURL, opt.Doi)
 	}
 	if opt.Provider == string(Invenio) {
-		return resolveInvenioEndpoint(ctx, client, resolvedURL)
+		return resolveInvenioEndpoint(ctx, srv, pacer, resolvedURL)
 	}
 
 	return "", nil, fmt.Errorf("provider '%s' is not supported", resolvedURL.Hostname())
@@ -194,20 +201,17 @@ func resolveEndpoint(ctx context.Context, client *http.Client, opt *Options) (pr
 
 // Make the http connection from the passed options
 func (f *Fs) httpConnection(ctx context.Context, opt *Options) (isFile bool, err error) {
-	client := fshttp.NewClient(ctx)
-
-	provider, endpoint, err := resolveEndpoint(ctx, client, opt)
+	provider, endpoint, err := resolveEndpoint(ctx, f.srv, f.pacer, opt)
 	if err != nil {
 		return false, err
 	}
 
 	// Update f with the new parameters
-	f.srv = rest.NewClient(client).SetRoot(endpoint.ResolveReference(&url.URL{Path: "/"}).String())
-	f.cache = cache.New()
+	f.srv.SetRoot(endpoint.ResolveReference(&url.URL{Path: "/"}).String())
 	f.endpoint = endpoint
 	f.endpointURL = endpoint.String()
-	f.doi = parseDoi(opt.Doi) // TODO: avoid calling parseDoi() again here
 	f.provider = provider
+	f.opt.Provider = string(provider)
 
 	// Determine if the root is a file
 	switch f.provider {
@@ -231,10 +235,28 @@ func (f *Fs) httpConnection(ctx context.Context, opt *Options) (isFile bool, err
 	return isFile, nil
 }
 
+// retryErrorCodes is a slice of error codes that we will retry
+var retryErrorCodes = []int{
+	429, // Too Many Requests.
+	500, // Internal Server Error
+	502, // Bad Gateway
+	503, // Service Unavailable
+	504, // Gateway Timeout
+	509, // Bandwidth Limit Exceeded
+}
+
+// shouldRetry returns a boolean as to whether this resp and err
+// deserve to be retried.  It returns the err as a convenience
+func shouldRetry(ctx context.Context, res *http.Response, err error) (bool, error) {
+	if fserrors.ContextError(ctx, &err) {
+		return false, err
+	}
+	return fserrors.ShouldRetry(err) || fserrors.ShouldRetryHTTP(res, retryErrorCodes), err
+}
+
 // NewFs creates a new Fs object from the name and root. It connects to
 // the host specified in the config file.
 func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, error) {
-	fs.Logf(nil, "name = '%s', root = '%s'", name, root)
 	root = strings.Trim(root, "/")
 
 	// Parse config into Options struct
@@ -243,19 +265,24 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	if err != nil {
 		return nil, err
 	}
+	opt.Doi = parseDoi(opt.Doi)
 
+	client := fshttp.NewClient(ctx)
 	ci := fs.GetConfig(ctx)
 	f := &Fs{
-		name: name,
-		root: root,
-		opt:  *opt,
-		ci:   ci,
+		name:  name,
+		root:  root,
+		opt:   *opt,
+		ci:    ci,
+		srv:   rest.NewClient(client),
+		pacer: fs.NewPacer(ctx, pacer.NewDefault(pacer.MinSleep(minSleep), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))),
+		cache: cache.New(),
 	}
 	f.features = (&fs.Features{
 		CanHaveEmptyDirectories: true,
 	}).Fill(ctx, f)
 
-	fs.Logf(nil, "name = '%s', root = '%s'", name, root)
+	fs.Logf(f, "name = '%s', root = '%s'", name, root)
 
 	isFile, err := f.httpConnection(ctx, opt)
 	if err != nil {
@@ -264,7 +291,6 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 
 	if isFile {
 		// return an error with an fs which points to the parent
-		// f.root = ""
 		newRoot := path.Dir(f.root)
 		if newRoot == "." {
 			newRoot = ""
@@ -288,7 +314,7 @@ func (f *Fs) Root() string {
 
 // String returns the URL for the filesystem
 func (f *Fs) String() string {
-	return fmt.Sprintf("DOI %s", f.doi)
+	return fmt.Sprintf("DOI %s", f.opt.Doi)
 }
 
 // Features returns the optional features of this Fs
@@ -449,7 +475,11 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 		k, v := opt.Header()
 		fs.Logf(o, "header '%s' = '%s'", k, v)
 	}
-	res, err := o.fs.srv.Call(ctx, &opts)
+	var res *http.Response
+	err = o.fs.pacer.Call(func() (bool, error) {
+		res, err = o.fs.srv.Call(ctx, &opts)
+		return shouldRetry(ctx, res, err)
+	})
 	if err != nil {
 		fs.Logf(o, "Open failed: '%s'", res.Status)
 		fs.Logf(o, "Open failed: '%s'", err.Error())
@@ -463,7 +493,10 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 		newURL, err := res.Location()
 		if err == nil {
 			opts.RootURL = newURL.String()
-			res, err = o.fs.srv.Call(ctx, &opts)
+			err = o.fs.pacer.Call(func() (bool, error) {
+				res, err = o.fs.srv.Call(ctx, &opts)
+				return shouldRetry(ctx, res, err)
+			})
 			if err != nil {
 				fs.Logf(o, "Open failed: '%s'", res.Status)
 				fs.Logf(o, "Open failed: '%s'", err.Error())
@@ -561,7 +594,10 @@ func (f *Fs) ShowMetadata(ctx context.Context) (metadata interface{}, err error)
 		Method:  "GET",
 		RootURL: metadataURL.String(),
 	}
-	_, err = f.srv.CallJSON(ctx, &opts, nil, &result)
+	err = f.pacer.Call(func() (bool, error) {
+		res, err := f.srv.CallJSON(ctx, &opts, nil, &result)
+		return shouldRetry(ctx, res, err)
+	})
 	if err != nil {
 		return nil, err
 	}

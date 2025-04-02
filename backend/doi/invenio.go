@@ -19,15 +19,18 @@ import (
 var invenioRecordRegex = regexp.MustCompile(`\/records?\/(.+)`)
 
 // Resolve the main API endpoint for a DOI hosted on an InvenioDRM installation
-func resolveInvenioEndpoint(ctx context.Context, client *http.Client, resolvedURL *url.URL) (provider Provider, endpoint *url.URL, err error) {
+func resolveInvenioEndpoint(ctx context.Context, srv *rest.Client, pacer *fs.Pacer, resolvedURL *url.URL) (provider Provider, endpoint *url.URL, err error) {
 	fs.Logf(nil, "invenioURL = %s", resolvedURL.String())
 
-	restClient := rest.NewClient(client)
+	var res *http.Response
 	opts := rest.Opts{
 		Method:  "GET",
 		RootURL: resolvedURL.String(),
 	}
-	res, err := restClient.Call(ctx, &opts)
+	err = pacer.Call(func() (bool, error) {
+		res, err = srv.Call(ctx, &opts)
+		return shouldRetry(ctx, res, err)
+	})
 	if err != nil {
 		return "", nil, err
 	}
@@ -46,7 +49,7 @@ func resolveInvenioEndpoint(ctx context.Context, client *http.Client, resolvedUR
 	}
 
 	if linksetURL != nil {
-		endpoint, err = checkInvenioAPIURL(ctx, restClient, linksetURL)
+		endpoint, err = checkInvenioAPIURL(ctx, srv, pacer, linksetURL)
 		if err == nil {
 			return Invenio, endpoint, nil
 		}
@@ -63,7 +66,7 @@ func resolveInvenioEndpoint(ctx context.Context, client *http.Client, resolvedUR
 		guessedURL := res.Request.URL.ResolveReference(&url.URL{
 			Path: "/api/records/" + recordID,
 		})
-		endpoint, err = checkInvenioAPIURL(ctx, restClient, guessedURL)
+		endpoint, err = checkInvenioAPIURL(ctx, srv, pacer, guessedURL)
 		if err == nil {
 			return Invenio, endpoint, nil
 		}
@@ -73,13 +76,16 @@ func resolveInvenioEndpoint(ctx context.Context, client *http.Client, resolvedUR
 	return "", nil, fmt.Errorf("could not resolve the Invenio API endpoint for '%s'", resolvedURL.String())
 }
 
-func checkInvenioAPIURL(ctx context.Context, client *rest.Client, resolvedURL *url.URL) (endpoint *url.URL, err error) {
+func checkInvenioAPIURL(ctx context.Context, srv *rest.Client, pacer *fs.Pacer, resolvedURL *url.URL) (endpoint *url.URL, err error) {
+	var result api.InvenioRecordResponse
 	opts := rest.Opts{
 		Method:  "GET",
 		RootURL: resolvedURL.String(),
 	}
-	var result api.InvenioRecordResponse
-	_, err = client.CallJSON(ctx, &opts, nil, &result)
+	err = pacer.Call(func() (bool, error) {
+		res, err := srv.CallJSON(ctx, &opts, nil, &result)
+		return shouldRetry(ctx, res, err)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +133,10 @@ func (f *Fs) listInvevioDoiFiles(ctx context.Context) (entries []*Object, err er
 		Path:   strings.TrimLeft(filesURL.EscapedPath(), "/"),
 	}
 	fs.Logf(f, "filesAPIPath = '%s'", opts.Path)
-	_, err = f.srv.CallJSON(ctx, &opts, nil, &result)
+	err = f.pacer.Call(func() (bool, error) {
+		res, err := f.srv.CallJSON(ctx, &opts, nil, &result)
+		return shouldRetry(ctx, res, err)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("readDir failed: %w", err)
 	}

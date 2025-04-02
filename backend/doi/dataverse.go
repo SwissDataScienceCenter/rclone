@@ -5,6 +5,7 @@ package doi
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"path"
 	"strings"
@@ -87,6 +88,7 @@ func (f *Fs) listDataverseDoiFiles(ctx context.Context) (entries []*Object, err 
 
 	filesURL := f.endpoint
 	fs.Logf(f, "filesURL = '%s'", filesURL.String())
+	var res *http.Response
 	var result api.DataverseDatasetResponse
 	opts := rest.Opts{
 		Method:     "GET",
@@ -94,9 +96,14 @@ func (f *Fs) listDataverseDoiFiles(ctx context.Context) (entries []*Object, err 
 		Parameters: filesURL.Query(),
 	}
 	fs.Logf(f, "filesAPIPath = '%s?%s'", opts.Path, opts.Parameters.Encode())
-	res, err := f.srv.CallJSON(ctx, &opts, nil, &result)
+	err = f.pacer.Call(func() (bool, error) {
+		res, err = f.srv.CallJSON(ctx, &opts, nil, &result)
+		return shouldRetry(ctx, res, err)
+	})
 	if err != nil {
-		fs.Logf(f, "%s", res.Status)
+		if res != nil {
+			fs.Logf(f, "%s", res.Status)
+		}
 		return nil, fmt.Errorf("readDir failed: %w", err)
 	}
 	modTime, modTimeErr := time.Parse(time.RFC3339, result.Data.LatestVersion.LastUpdateTime)

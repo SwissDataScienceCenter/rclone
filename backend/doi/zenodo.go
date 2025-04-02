@@ -5,7 +5,6 @@ package doi
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"net/url"
 	"regexp"
 
@@ -17,7 +16,7 @@ import (
 var zenodoRecordRegex = regexp.MustCompile(`zenodo[.](.+)`)
 
 // Resolve the main API endpoint for a DOI hosted on Zenodo
-func resolveZenodoEndpoint(ctx context.Context, client *http.Client, resolvedURL *url.URL, doi string) (provider Provider, endpoint *url.URL, err error) {
+func resolveZenodoEndpoint(ctx context.Context, srv *rest.Client, pacer *fs.Pacer, resolvedURL *url.URL, doi string) (provider Provider, endpoint *url.URL, err error) {
 	fs.Logf(nil, "zenodoURL = %s", resolvedURL.String())
 
 	match := zenodoRecordRegex.FindStringSubmatch(doi)
@@ -28,13 +27,15 @@ func resolveZenodoEndpoint(ctx context.Context, client *http.Client, resolvedURL
 	recordID := match[1]
 	endpointURL := resolvedURL.ResolveReference(&url.URL{Path: "/api/records/" + recordID})
 
-	restClient := rest.NewClient(client)
 	var result api.InvenioRecordResponse
 	opts := rest.Opts{
 		Method:  "GET",
 		RootURL: endpointURL.String(),
 	}
-	_, err = restClient.CallJSON(ctx, &opts, nil, &result)
+	err = pacer.Call(func() (bool, error) {
+		res, err := srv.CallJSON(ctx, &opts, nil, &result)
+		return shouldRetry(ctx, res, err)
+	})
 	if err != nil {
 		return "", nil, err
 	}
