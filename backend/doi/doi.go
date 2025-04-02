@@ -637,7 +637,7 @@ func (f *Fs) ShowMetadata(ctx context.Context) (metadata interface{}, err error)
 	return result, nil
 }
 
-// ShowMetadata returns the title associated with the DOI
+// ShowTitle returns the title associated with the DOI
 func (f *Fs) ShowTitle(ctx context.Context) (title string, err error) {
 	switch f.provider {
 	case Dataverse:
