@@ -16,6 +16,13 @@ import (
 	"github.com/rclone/rclone/lib/rest"
 )
 
+// Returns true if resolvedURL is likely a DOI hosted on a Dataverse intallation
+func activateDataverse(resolvedURL *url.URL) (isActive bool) {
+	queryValues := resolvedURL.Query()
+	persistentID := queryValues.Get("persistentId")
+	return persistentID != ""
+}
+
 // Resolve the main API endpoint for a DOI hosted on a Dataverse installation
 func resolveDataverseEndpoint(resolvedURL *url.URL) (provider Provider, endpoint *url.URL, err error) {
 	fs.Logf(nil, "dataverseURL = %s", resolvedURL.String())

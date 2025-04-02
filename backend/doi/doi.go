@@ -200,11 +200,14 @@ func resolveEndpoint(ctx context.Context, srv *rest.Client, pacer *fs.Pacer, opt
 	}
 
 	// TODO: improve auto-detect
-	if hostname == "dataverse.harvard.edu" {
+	if hostname == "dataverse.harvard.edu" || activateDataverse(resolvedURL) {
 		return resolveDataverseEndpoint(resolvedURL)
 	}
 	if hostname == "zenodo.org" || strings.HasSuffix(hostname, ".zenodo.org") {
 		return resolveZenodoEndpoint(ctx, srv, pacer, resolvedURL, opt.Doi)
+	}
+	if activateInvenio(ctx, srv, pacer, resolvedURL) {
+		return resolveInvenioEndpoint(ctx, srv, pacer, resolvedURL)
 	}
 
 	return "", nil, fmt.Errorf("provider '%s' is not supported", resolvedURL.Hostname())
@@ -544,6 +547,18 @@ It returns a JSON object representing the DOI.
 It returns a string representing the DOI title.
 `,
 }, {
+	Name:  "provider",
+	Short: "Show the DOI provider.",
+	Long: `This command returns the DOI provider.
+
+    rclone backend provider doi: 
+
+This command can be used to update the rclone.conf file for faster operations with the doi backend
+as auto-detection for the provider can be avoided.
+
+It returns a string representing the DOI provider.
+`,
+}, {
 	Name:  "set",
 	Short: "Set command for updating the config parameters.",
 	Long: `This set command can be used to update the config parameters
@@ -580,6 +595,8 @@ func (f *Fs) Command(ctx context.Context, name string, arg []string, opt map[str
 		return f.ShowMetadata(ctx)
 	case "title":
 		return f.ShowTitle(ctx)
+	case "provider":
+		return string(f.provider), nil
 	case "set":
 		newOpt := f.opt
 		err := configstruct.Set(configmap.Simple(opt), &newOpt)
