@@ -56,16 +56,21 @@ func init() {
 			Help: `DOI provider.
 
 The DOI provider can be set when rclone does not automatically recognize a supported DOI provider.`,
-			Examples: []fs.OptionExample{{
-				Value: string(Zenodo),
-				Help:  "Zenodo",
-			}, {
-				Value: string(Dataverse),
-				Help:  "Dataverse",
-			}, {
-				Value: string(Invenio),
-				Help:  "Invenio",
-			}},
+			Examples: []fs.OptionExample{
+				{
+					Value: "auto",
+					Help:  "Auto-detect provider",
+				},
+				{
+					Value: string(Zenodo),
+					Help:  "Zenodo",
+				}, {
+					Value: string(Dataverse),
+					Help:  "Dataverse",
+				}, {
+					Value: string(Invenio),
+					Help:  "Invenio",
+				}},
 			Required: false,
 			Advanced: true,
 		}},
@@ -185,15 +190,21 @@ func resolveEndpoint(ctx context.Context, srv *rest.Client, pacer *fs.Pacer, opt
 
 	hostname := strings.ToLower(resolvedURL.Hostname())
 
-	// TODO: improve dataverse detection
-	if hostname == "dataverse.harvard.edu" || opt.Provider == string(Dataverse) {
+	switch opt.Provider {
+	case string(Dataverse):
 		return resolveDataverseEndpoint(resolvedURL)
-	}
-	if hostname == "zenodo.org" || strings.HasSuffix(hostname, ".zenodo.org") || opt.Provider == string(Zenodo) {
+	case string(Invenio):
+		return resolveInvenioEndpoint(ctx, srv, pacer, resolvedURL)
+	case string(Zenodo):
 		return resolveZenodoEndpoint(ctx, srv, pacer, resolvedURL, opt.Doi)
 	}
-	if opt.Provider == string(Invenio) {
-		return resolveInvenioEndpoint(ctx, srv, pacer, resolvedURL)
+
+	// TODO: improve auto-detect
+	if hostname == "dataverse.harvard.edu" {
+		return resolveDataverseEndpoint(resolvedURL)
+	}
+	if hostname == "zenodo.org" || strings.HasSuffix(hostname, ".zenodo.org") {
+		return resolveZenodoEndpoint(ctx, srv, pacer, resolvedURL, opt.Doi)
 	}
 
 	return "", nil, fmt.Errorf("provider '%s' is not supported", resolvedURL.Hostname())
