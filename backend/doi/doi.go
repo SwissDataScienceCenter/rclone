@@ -188,8 +188,6 @@ func resolveEndpoint(ctx context.Context, srv *rest.Client, pacer *fs.Pacer, opt
 		return "", nil, err
 	}
 
-	hostname := strings.ToLower(resolvedURL.Hostname())
-
 	switch opt.Provider {
 	case string(Dataverse):
 		return resolveDataverseEndpoint(resolvedURL)
@@ -200,6 +198,7 @@ func resolveEndpoint(ctx context.Context, srv *rest.Client, pacer *fs.Pacer, opt
 	}
 
 	// TODO: improve auto-detect
+	hostname := strings.ToLower(resolvedURL.Hostname())
 	if hostname == "dataverse.harvard.edu" || activateDataverse(resolvedURL) {
 		return resolveDataverseEndpoint(resolvedURL)
 	}
