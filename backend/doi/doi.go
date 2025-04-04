@@ -1,4 +1,5 @@
 // Package doi provides a filesystem interface for digital objects identified by DOIs.
+//
 // See: https://www.doi.org/the-identifier/what-is-a-doi/
 package doi
 
@@ -9,15 +10,30 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path"
 	"strings"
 	"time"
 
+	"github.com/rclone/rclone/backend/doi/api"
 	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/config/configstruct"
+	"github.com/rclone/rclone/fs/fserrors"
 	"github.com/rclone/rclone/fs/fshttp"
 	"github.com/rclone/rclone/fs/hash"
+	"github.com/rclone/rclone/lib/cache"
+	"github.com/rclone/rclone/lib/pacer"
 	"github.com/rclone/rclone/lib/rest"
+)
+
+const (
+	// the URL of the DOI resolver
+	//
+	// Reference: https://www.doi.org/the-identifier/resources/factsheets/doi-resolution-documentation
+	doiResolverAPIURL = "https://doi.org/api"
+	minSleep          = 10 * time.Millisecond
+	maxSleep          = 2 * time.Second
+	decayConstant     = 2 // bigger for slower decay, exponential
 )
 
 var (
@@ -30,224 +46,254 @@ func init() {
 		Name:        "doi",
 		Description: "DOI datasets",
 		NewFs:       NewFs,
-		// CommandHelp: commandHelp,
+		CommandHelp: commandHelp,
 		Options: []fs.Option{{
 			Name:     "doi",
 			Help:     "The DOI or the doi.org URL.",
 			Required: true,
 		}, {
 			Name: fs.ConfigProvider,
-			Help: "DOI provider.",
-			Examples: []fs.OptionExample{{
-				Value: "Zenodo",
-				Help:  "Zenodo",
-			}},
+			Help: `DOI provider.
+
+The DOI provider can be set when rclone does not automatically recognize a supported DOI provider.`,
+			Examples: []fs.OptionExample{
+				{
+					Value: "auto",
+					Help:  "Auto-detect provider",
+				},
+				{
+					Value: string(Zenodo),
+					Help:  "Zenodo",
+				}, {
+					Value: string(Dataverse),
+					Help:  "Dataverse",
+				}, {
+					Value: string(Invenio),
+					Help:  "Invenio",
+				}},
 			Required: false,
+			Advanced: true,
 		}},
 	}
 	fs.Register(fsi)
 }
 
+// Provider defines the type of provider hosting the DOI
+type Provider string
+
+var (
+	// Zenodo provider, see https://zenodo.org
+	Zenodo Provider = "zenodo"
+	// Dataverse provider, see https://dataverse.harvard.edu
+	Dataverse Provider = "dataverse"
+	// Invenio provider, see https://inveniordm.docs.cern.ch
+	Invenio Provider = "invenio"
+)
+
 // Options defines the configuration for this backend
 type Options struct {
-	Doi      string `config:"doi"`
-	Provider string `config:"provider"`
+	Doi      string `config:"doi"`      // The DOI, a digital identifier of an object, usually a dataset
+	Provider string `config:"provider"` // The DOI provider
 }
 
 // Fs stores the interface to the remote HTTP files
 type Fs struct {
-	name        string
-	root        string
+	name        string         // name of this remote
+	root        string         // the path we are working on
+	provider    Provider       // the DOI provider
 	features    *fs.Features   // optional features
 	opt         Options        // options for this backend
 	ci          *fs.ConfigInfo // global config
-	endpoint    *url.URL
-	endpointURL string // endpoint as a string
-	httpClient  *http.Client
+	endpoint    *url.URL       // the main API endpoint for this remote
+	endpointURL string         // endpoint as a string
+	srv         *rest.Client   // the connection to the server
+	pacer       *fs.Pacer      // pacer for API calls
+	cache       *cache.Cache   // a cache for the remote metadata
 }
 
 // Object is a remote object that has been stat'd (so it exists, but is not necessarily open for reading)
 type Object struct {
-	fs          *Fs
-	name        string
-	contentURL  string
-	size        int64
-	modTime     time.Time
-	contentType string
+	fs          *Fs       // what this object is part of
+	remote      string    // the remote path
+	contentURL  string    // the URL where the contents of the file can be downloaded
+	size        int64     // size of the object
+	modTime     time.Time // modification time of the object
+	contentType string    // content type of the object
+	md5         string    // MD5 hash of the object content
 }
 
-// statusError returns an error if the response contained an error
-func statusError(res *http.Response, err error) error {
+// Parse the input string as a DOI
+// Examples:
+// 10.1000/182 -> 10.1000/182
+// https://doi.org/10.1000/182 -> 10.1000/182
+// doi:10.1000/182 -> 10.1000/182
+func parseDoi(doi string) string {
+	doiURL, err := url.Parse(doi)
 	if err != nil {
-		return err
+		return doi
 	}
-	if res.StatusCode < 200 || res.StatusCode > 299 {
-		_ = res.Body.Close()
-		return fmt.Errorf("HTTP Error: %s", res.Status)
+	if doiURL.Scheme == "doi" {
+		return strings.TrimLeft(strings.TrimLeft(doi, "doi:"), "/")
 	}
-	return nil
+	if strings.HasSuffix(doiURL.Hostname(), "doi.org") {
+		return strings.TrimLeft(doiURL.Path, "/")
+	}
+	return doi
 }
 
-type cslData struct {
-	URL string `json:"URL"`
+// Resolve a DOI to a URL
+// Reference: https://www.doi.org/the-identifier/resources/factsheets/doi-resolution-documentation
+func resolveDoiURL(ctx context.Context, srv *rest.Client, pacer *fs.Pacer, opt *Options) (doiURL *url.URL, err error) {
+	var result api.DoiResolverResponse
+	params := url.Values{}
+	params.Add("index", "1")
+	opts := rest.Opts{
+		Method:     "GET",
+		RootURL:    doiResolverAPIURL,
+		Path:       "/handles/" + opt.Doi,
+		Parameters: params,
+	}
+	err = pacer.Call(func() (bool, error) {
+		res, err := srv.CallJSON(ctx, &opts, nil, &result)
+		return shouldRetry(ctx, res, err)
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if result.ResponseCode != 1 {
+		return nil, fmt.Errorf("could not resolve DOI (error code %d)", result.ResponseCode)
+	}
+	resolvedURLStr := ""
+	for _, value := range result.Values {
+		if value.Type == "URL" && value.Data.Format == "string" {
+			valueStr, ok := value.Data.Value.(string)
+			if !ok {
+				return nil, fmt.Errorf("could not resolve DOI (incorrect response format)")
+			}
+			resolvedURLStr = valueStr
+		}
+	}
+	resolvedURL, err := url.Parse(resolvedURLStr)
+	if err != nil {
+		return nil, err
+	}
+	return resolvedURL, nil
 }
 
-// Resolve the passed configuration into an enpoint
-func resolveEndpoint(ctx context.Context, client *http.Client, opt *Options) (endpoint *url.URL, err error) {
-	// TODO: this assumes `opt.Doi` is a pure DOI
-	baseURL, err := url.Parse("https://dx.doi.org/")
+// Resolve the passed configuration into a provider and enpoint
+func resolveEndpoint(ctx context.Context, srv *rest.Client, pacer *fs.Pacer, opt *Options) (provider Provider, endpoint *url.URL, err error) {
+	resolvedURL, err := resolveDoiURL(ctx, srv, pacer, opt)
 	if err != nil {
-		return nil, err
-	}
-	doiURL, err := url.JoinPath(baseURL.String(), opt.Doi)
-	if err != nil {
-		return nil, err
-	}
-	fs.Logf(nil, "DOI URL = %s", doiURL)
-	req, err := http.NewRequestWithContext(ctx, "GET", doiURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	// Manually ask for JSON
-	req.Header.Add("Accept", "application/vnd.citationstyles.csl+json")
-	res, err := client.Do(req)
-	if err == nil {
-		defer fs.CheckClose(res.Body, &err)
-		if res.StatusCode == http.StatusNotFound {
-			return nil, fs.ErrorDirNotFound
-		}
-	}
-	err = statusError(res, err)
-	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 
-	var zenodoURL *url.URL
-	contentType := strings.SplitN(res.Header.Get("Content-Type"), ";", 2)[0]
-	switch contentType {
-	case "application/vnd.citationstyles.csl+json":
-		// TODO: split into a parse method?
-		record := new(cslData)
-		err = rest.DecodeJSON(res, &record)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read DOI: %w", err)
-		}
-		zenodoURL, err = url.Parse(record.URL)
-		if err != nil {
-			return nil, err
-		}
-	default:
-		return nil, fmt.Errorf("can't parse content type %q", contentType)
+	switch opt.Provider {
+	case string(Dataverse):
+		return resolveDataverseEndpoint(resolvedURL)
+	case string(Invenio):
+		return resolveInvenioEndpoint(ctx, srv, pacer, resolvedURL)
+	case string(Zenodo):
+		return resolveZenodoEndpoint(ctx, srv, pacer, resolvedURL, opt.Doi)
 	}
 
-	hostname := strings.ToLower(zenodoURL.Hostname())
-	if hostname != "zenodo.org" || strings.HasSuffix(hostname, ".zenodo.org") {
-		return nil, fmt.Errorf("provider '%s' is not supported", zenodoURL.Hostname())
+	// TODO: improve auto-detect
+	hostname := strings.ToLower(resolvedURL.Hostname())
+	if hostname == "dataverse.harvard.edu" || activateDataverse(resolvedURL) {
+		return resolveDataverseEndpoint(resolvedURL)
+	}
+	if hostname == "zenodo.org" || strings.HasSuffix(hostname, ".zenodo.org") {
+		return resolveZenodoEndpoint(ctx, srv, pacer, resolvedURL, opt.Doi)
+	}
+	if activateInvenio(ctx, srv, pacer, resolvedURL) {
+		return resolveInvenioEndpoint(ctx, srv, pacer, resolvedURL)
 	}
 
-	fs.Logf(nil, "zenodoURL = %s", zenodoURL.String())
-
-	req, err = http.NewRequestWithContext(ctx, "HEAD", zenodoURL.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-	res, err = client.Do(req)
-	if err == nil {
-		defer fs.CheckClose(res.Body, &err)
-		if res.StatusCode == http.StatusNotFound {
-			return nil, fs.ErrorDirNotFound
-		}
-	}
-	err = statusError(res, err)
-	if err != nil {
-		return nil, err
-	}
-
-	links := parseLinkHeader(res.Header.Get("Link"))
-	linksetURL := ""
-	for _, link := range links {
-		if link.Rel == "linkset" {
-			linksetURL = link.Href
-		}
-	}
-	fs.Logf(nil, "linksetURL = %s", linksetURL)
-	return url.Parse(linksetURL)
+	return "", nil, fmt.Errorf("provider '%s' is not supported", resolvedURL.Hostname())
 }
 
 // Make the http connection from the passed options
 func (f *Fs) httpConnection(ctx context.Context, opt *Options) (isFile bool, err error) {
-	client := fshttp.NewClient(ctx)
-
-	endpoint, err := resolveEndpoint(ctx, client, opt)
+	provider, endpoint, err := resolveEndpoint(ctx, f.srv, f.pacer, opt)
 	if err != nil {
 		return false, err
 	}
 
-	// Note that we assume that there are no subfolders for DOI objects
-	isFile = f.root != ""
-
 	// Update f with the new parameters
-	f.httpClient = client
+	f.srv.SetRoot(endpoint.ResolveReference(&url.URL{Path: "/"}).String())
 	f.endpoint = endpoint
 	f.endpointURL = endpoint.String()
+	f.provider = provider
+	f.opt.Provider = string(provider)
+
+	// Determine if the root is a file
+	switch f.provider {
+	case Dataverse:
+		entries, err := f.listDataverseDoiFiles(ctx)
+		if err != nil {
+			return false, err
+		}
+		for _, entry := range entries {
+			if entry.remote == f.root {
+				isFile = true
+				break
+			}
+		}
+	case Invenio, Zenodo:
+		isFile = f.root != ""
+	}
+
 	return isFile, nil
+}
 
-	// if len(opt.Headers)%2 != 0 {
-	// 	return false, errors.New("odd number of headers supplied")
-	// }
+// retryErrorCodes is a slice of error codes that we will retry
+var retryErrorCodes = []int{
+	429, // Too Many Requests.
+	500, // Internal Server Error
+	502, // Bad Gateway
+	503, // Service Unavailable
+	504, // Gateway Timeout
+	509, // Bandwidth Limit Exceeded
+}
 
-	// if !strings.HasSuffix(opt.Endpoint, "/") {
-	// 	opt.Endpoint += "/"
-	// }
-
-	// // Parse the endpoint and stick the root onto it
-	// base, err := url.Parse(opt.Endpoint)
-	// if err != nil {
-	// 	return false, err
-	// }
-	// u, err := rest.URLJoin(base, rest.URLPathEscape(f.root))
-	// if err != nil {
-	// 	return false, err
-	// }
-
-	// client := fshttp.NewClient(ctx)
-
-	// endpoint, isFile := getFsEndpoint(ctx, client, u.String(), opt)
-	// fs.Debugf(nil, "Root: %s", endpoint)
-	// u, err = url.Parse(endpoint)
-	// if err != nil {
-	// 	return false, err
-	// }
-
-	// // Update f with the new parameters
-	// f.httpClient = client
-	// f.endpoint = u
-	// f.endpointURL = u.String()
-	// return isFile, nil
+// shouldRetry returns a boolean as to whether this resp and err
+// deserve to be retried.  It returns the err as a convenience
+func shouldRetry(ctx context.Context, res *http.Response, err error) (bool, error) {
+	if fserrors.ContextError(ctx, &err) {
+		return false, err
+	}
+	return fserrors.ShouldRetry(err) || fserrors.ShouldRetryHTTP(res, retryErrorCodes), err
 }
 
 // NewFs creates a new Fs object from the name and root. It connects to
 // the host specified in the config file.
 func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, error) {
+	root = strings.Trim(root, "/")
+
 	// Parse config into Options struct
 	opt := new(Options)
 	err := configstruct.Set(m, opt)
 	if err != nil {
 		return nil, err
 	}
+	opt.Doi = parseDoi(opt.Doi)
 
+	client := fshttp.NewClient(ctx)
 	ci := fs.GetConfig(ctx)
 	f := &Fs{
-		name: name,
-		root: root,
-		opt:  *opt,
-		ci:   ci,
+		name:  name,
+		root:  root,
+		opt:   *opt,
+		ci:    ci,
+		srv:   rest.NewClient(client),
+		pacer: fs.NewPacer(ctx, pacer.NewDefault(pacer.MinSleep(minSleep), pacer.MaxSleep(maxSleep), pacer.DecayConstant(decayConstant))),
+		cache: cache.New(),
 	}
 	f.features = (&fs.Features{
 		CanHaveEmptyDirectories: true,
 	}).Fill(ctx, f)
 
-	fs.Logf(nil, "name = %s, root = %s", name, root)
+	fs.Logf(f, "name = '%s', root = '%s'", name, root)
 
 	isFile, err := f.httpConnection(ctx, opt)
 	if err != nil {
@@ -256,7 +302,11 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 
 	if isFile {
 		// return an error with an fs which points to the parent
-		f.root = ""
+		newRoot := path.Dir(f.root)
+		if newRoot == "." {
+			newRoot = ""
+		}
+		f.root = newRoot
 		return f, fs.ErrorIsFile
 	}
 
@@ -275,7 +325,7 @@ func (f *Fs) Root() string {
 
 // String returns the URL for the filesystem
 func (f *Fs) String() string {
-	return f.endpointURL
+	return fmt.Sprintf("DOI %s", f.opt.Doi)
 }
 
 // Features returns the optional features of this Fs
@@ -290,7 +340,8 @@ func (f *Fs) Precision() time.Duration {
 
 // Hashes returns hash.HashNone to indicate remote hashing is unavailable
 func (f *Fs) Hashes() hash.Set {
-	return hash.Set(hash.None)
+	return hash.Set(hash.MD5)
+	// return hash.Set(hash.None)
 }
 
 // Mkdir makes the root directory of the Fs object
@@ -312,8 +363,16 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 	fs.Logf(nil, "remote = %s", remote)
 
-	// TODO: Can we avoid listing the files?
-	entries, err := f.listDoiFiles(ctx)
+	var entries []*Object
+	var err error
+	switch f.provider {
+	case Dataverse:
+		entries, err = f.listDataverseDoiFiles(ctx)
+	case Invenio, Zenodo:
+		entries, err = f.listInvevioDoiFiles(ctx)
+	default:
+		err = fmt.Errorf("provider type '%s' not supported", f.provider)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -326,151 +385,6 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 	}
 
 	return nil, fs.ErrorObjectNotFound
-
-	// return nil, fmt.Errorf("TODO: implement NewObject")
-
-	// o := &Object{
-	// 	fs:     f,
-	// 	remote: remote,
-	// }
-	// err := o.head(ctx)
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// return o, nil
-}
-
-// Adds the configured headers to the request if any
-func addHeaders(req *http.Request, opt *Options) {
-	// for i := 0; i < len(opt.Headers); i += 2 {
-	// 	key := opt.Headers[i]
-	// 	value := opt.Headers[i+1]
-	// 	req.Header.Add(key, value)
-	// }
-}
-
-// Adds the configured headers to the request if any
-func (f *Fs) addHeaders(req *http.Request) {
-	addHeaders(req, &f.opt)
-}
-
-type zenodoRecord struct {
-	Files []zenodoDatasetFile `json:"files"`
-}
-
-type zenodoDatasetFile struct {
-	ID       string      `json:"id"`
-	Key      string      `json:"key"`
-	Size     int64       `json:"size"`
-	Checksum string      `json:"checksum"`
-	Links    zenodoLinks `json:"links"`
-}
-
-type zenodoLinks struct {
-	Self string `json:"self"`
-}
-
-// List the files contained in the DOI
-func (f *Fs) listDoiFiles(ctx context.Context) (entries []*Object, err error) {
-	URL := f.endpointURL
-	// Do the request
-	req, err := http.NewRequestWithContext(ctx, "GET", URL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("readDir failed: %w", err)
-	}
-	f.addHeaders(req)
-
-	// Manually ask for JSON
-	req.Header.Add("Accept", "application/json")
-
-	res, err := f.httpClient.Do(req)
-	if err == nil {
-		defer fs.CheckClose(res.Body, &err)
-		if res.StatusCode == http.StatusNotFound {
-			return nil, fs.ErrorDirNotFound
-		}
-	}
-	err = statusError(res, err)
-	if err != nil {
-		return nil, fmt.Errorf("failed to readDir: %w", err)
-	}
-
-	contentType := strings.SplitN(res.Header.Get("Content-Type"), ";", 2)[0]
-	switch contentType {
-	case "application/json":
-		// TODO: split into a parse method?
-		record := new(zenodoRecord)
-		err = rest.DecodeJSON(res, &record)
-		if err != nil {
-			return nil, fmt.Errorf("failed to readDir: %w", err)
-		}
-		for _, file := range record.Files {
-			entry := &Object{
-				fs:          f,
-				name:        file.Key,
-				contentURL:  file.Links.Self,
-				size:        file.Size,
-				modTime:     timeUnset,
-				contentType: "application/octet-stream", // TODO
-			}
-			entries = append(entries, entry)
-
-		}
-	default:
-		return nil, fmt.Errorf("can't parse content type %q", contentType)
-	}
-
-	return entries, nil
-
-	// contentType := strings.SplitN(res.Header.Get("Content-Type"), ";", 2)[0]
-	// switch contentType {
-	// case "text/html":
-	// 	names, err = parse(u, res.Body)
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("readDir: %w", err)
-	// 	}
-	// default:
-	// 	return nil, fmt.Errorf("can't parse content type %q", contentType)
-	// }
-	// return names, nil
-
-	// URL := f.url(dir)
-	// u, err := url.Parse(URL)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("failed to readDir: %w", err)
-	// }
-	// if !strings.HasSuffix(URL, "/") {
-	// 	return nil, fmt.Errorf("internal error: readDir URL %q didn't end in /", URL)
-	// }
-	// // Do the request
-	// req, err := http.NewRequestWithContext(ctx, "GET", URL, nil)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("readDir failed: %w", err)
-	// }
-	// f.addHeaders(req)
-	// res, err := f.httpClient.Do(req)
-	// if err == nil {
-	// 	defer fs.CheckClose(res.Body, &err)
-	// 	if res.StatusCode == http.StatusNotFound {
-	// 		return nil, fs.ErrorDirNotFound
-	// 	}
-	// }
-	// err = statusError(res, err)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("failed to readDir: %w", err)
-	// }
-
-	// contentType := strings.SplitN(res.Header.Get("Content-Type"), ";", 2)[0]
-	// switch contentType {
-	// case "text/html":
-	// 	names, err = parse(u, res.Body)
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("readDir: %w", err)
-	// 	}
-	// default:
-	// 	return nil, fmt.Errorf("can't parse content type %q", contentType)
-	// }
-	// return names, nil
 }
 
 // List the objects and directories in dir into entries.  The
@@ -483,70 +397,14 @@ func (f *Fs) listDoiFiles(ctx context.Context) (entries []*Object, err error) {
 // This should return ErrDirNotFound if the directory isn't
 // found.
 func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err error) {
-	if dir != "" {
-		err := fmt.Errorf("doi remote does not support subfolders")
-		return nil, fmt.Errorf("error listing %q: %w", dir, err)
+	switch f.provider {
+	case Dataverse:
+		return f.listDataverse(ctx, dir)
+	case Invenio, Zenodo:
+		return f.listInvenio(ctx, dir)
+	default:
+		return nil, fmt.Errorf("provider type '%s' not supported", f.provider)
 	}
-
-	fileEntries, err := f.listDoiFiles(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("error listing %q: %w", dir, err)
-	}
-	for _, entry := range fileEntries {
-		entries = append(entries, entry)
-	}
-	fs.Logf(nil, "entries = %s", entries)
-
-	// TODO: get modTime and contentType for each entry (see below)
-	return entries, nil
-
-	// var (
-	// 	entriesMu sync.Mutex // to protect entries
-	// 	wg        sync.WaitGroup
-	// 	checkers  = f.ci.Checkers
-	// 	in        = make(chan string, checkers)
-	// )
-	// add := func(entry fs.DirEntry) {
-	// 	entriesMu.Lock()
-	// 	entries = append(entries, entry)
-	// 	entriesMu.Unlock()
-	// }
-	// for i := 0; i < checkers; i++ {
-	// 	wg.Add(1)
-	// 	go func() {
-	// 		defer wg.Done()
-	// 		for remote := range in {
-	// 			file := &Object{
-	// 				fs:     f,
-	// 				remote: remote,
-	// 			}
-	// 			switch err := file.head(ctx); err {
-	// 			case nil:
-	// 				add(file)
-	// 			case fs.ErrorNotAFile:
-	// 				// ...found a directory not a file
-	// 				add(fs.NewDir(remote, time.Time{}))
-	// 			default:
-	// 				fs.Debugf(remote, "skipping because of error: %v", err)
-	// 			}
-	// 		}
-	// 	}()
-	// }
-	// for _, name := range names {
-	// 	isDir := name[len(name)-1] == '/'
-	// 	name = strings.TrimRight(name, "/")
-	// 	remote := path.Join(dir, name)
-	// 	if isDir {
-	// 		add(fs.NewDir(remote, time.Time{}))
-	// 	} else {
-	// 		in <- remote
-	// 	}
-	// }
-	// close(in)
-	// wg.Wait()
-	// return entries, nil
-
-	// return nil, fmt.Errorf("TODO: implement List()")
 }
 
 // Put in to the remote path with the modTime given of the given size
@@ -555,6 +413,11 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 // will return the object and the error, otherwise will return
 // nil and the error
 func (f *Fs) Put(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.Object, error) {
+	return nil, errorReadOnly
+}
+
+// PutStream uploads to the remote path with the modTime given of indeterminate size
+func (f *Fs) PutStream(ctx context.Context, in io.Reader, src fs.ObjectInfo, options ...fs.OpenOption) (fs.Object, error) {
 	return nil, errorReadOnly
 }
 
@@ -568,18 +431,20 @@ func (o *Object) String() string {
 	if o == nil {
 		return "<nil>"
 	}
-	return o.name
+	return o.remote
 }
 
 // Remote the name of the remote HTTP file, relative to the fs root
 func (o *Object) Remote() string {
-	return o.name
+	return o.remote
 }
 
 // Hash returns "" since HTTP (in Go or OpenSSH) doesn't support remote calculation of hashes
-func (o *Object) Hash(ctx context.Context, r hash.Type) (string, error) {
-	// TODO: it seems md5 checksums are returned, so we can support them
-	return "", hash.ErrUnsupported
+func (o *Object) Hash(ctx context.Context, t hash.Type) (string, error) {
+	if t != hash.MD5 {
+		return "", hash.ErrUnsupported
+	}
+	return o.md5, nil
 }
 
 // Size returns the size in bytes of the remote http file
@@ -606,28 +471,49 @@ func (o *Object) Storable() bool {
 
 // Open a remote http file object for reading. Seek is supported
 func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.ReadCloser, err error) {
-	url := o.contentURL
-	fs.Logf(nil, "Open URL = %s", url)
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	fs.FixRangeOption(options, o.size)
+	opts := rest.Opts{
+		Method:  "GET",
+		RootURL: o.contentURL,
+		Options: options,
+	}
+	fs.Logf(o, "Open with URL = '%s'", o.contentURL)
+	for _, opt := range opts.Options {
+		k, v := opt.Header()
+		fs.Logf(o, "header '%s' = '%s'", k, v)
+	}
+	var res *http.Response
+	err = o.fs.pacer.Call(func() (bool, error) {
+		res, err = o.fs.srv.Call(ctx, &opts)
+		return shouldRetry(ctx, res, err)
+	})
 	if err != nil {
+		fs.Logf(o, "Open failed: '%s'", res.Status)
+		fs.Logf(o, "Open failed: '%s'", err.Error())
 		return nil, fmt.Errorf("Open failed: %w", err)
 	}
+	fs.Logf(o, "Open response: '%s'", res.Status)
+	fs.Logf(o, "Open response: '%v'", res.Header)
 
-	// Add optional headers
-	for k, v := range fs.OpenOptionHeaders(options) {
-		req.Header.Add(k, v)
+	// Handle non-compliant redirects
+	if res.Header.Get("Location") != "" {
+		newURL, err := res.Location()
+		if err == nil {
+			opts.RootURL = newURL.String()
+			err = o.fs.pacer.Call(func() (bool, error) {
+				res, err = o.fs.srv.Call(ctx, &opts)
+				return shouldRetry(ctx, res, err)
+			})
+			if err != nil {
+				fs.Logf(o, "Open failed: '%s'", res.Status)
+				fs.Logf(o, "Open failed: '%s'", err.Error())
+				return nil, fmt.Errorf("Open failed: %w", err)
+			}
+			fs.Logf(o, "Open response: '%s'", res.Status)
+			fs.Logf(o, "Open response: '%v'", res.Header)
+		}
 	}
-	o.fs.addHeaders(req)
 
-	// Do the request
-	res, err := o.fs.httpClient.Do(req)
-	err = statusError(res, err)
-	if err != nil {
-		return nil, fmt.Errorf("Open failed: %w", err)
-	}
-	if err = o.decodeMetadata(ctx, res); err != nil {
-		return nil, fmt.Errorf("decodeMetadata failed: %w", err)
-	}
 	return res.Body, nil
 }
 
@@ -641,59 +527,147 @@ func (o *Object) MimeType(ctx context.Context) string {
 	return o.contentType
 }
 
-// // head sends a HEAD request to update info fields in the Object
-// func (o *Object) head(ctx context.Context) error {
-// 	if o.fs.opt.NoHead {
-// 		o.size = -1
-// 		o.modTime = timeUnset
-// 		o.contentType = fs.MimeType(ctx, o)
-// 		return nil
-// 	}
-// 	url := o.url()
-// 	req, err := http.NewRequestWithContext(ctx, "HEAD", url, nil)
-// 	if err != nil {
-// 		return fmt.Errorf("stat failed: %w", err)
-// 	}
-// 	o.fs.addHeaders(req)
-// 	res, err := o.fs.httpClient.Do(req)
-// 	if err == nil && res.StatusCode == http.StatusNotFound {
-// 		return fs.ErrorObjectNotFound
-// 	}
-// 	err = statusError(res, err)
-// 	if err != nil {
-// 		return fmt.Errorf("failed to stat: %w", err)
-// 	}
-// 	return o.decodeMetadata(ctx, res)
-// }
+var commandHelp = []fs.CommandHelp{{
+	Name:  "metadata",
+	Short: "Show metadata about the DOI.",
+	Long: `This command returns the JSON representation of the DOI.
 
-// decodeMetadata updates info fields in the Object according to HTTP response headers
-func (o *Object) decodeMetadata(ctx context.Context, res *http.Response) error {
-	t, err := http.ParseTime(res.Header.Get("Last-Modified"))
-	if err != nil {
-		t = timeUnset
+    rclone backend medatadata doi: 
+
+It returns a JSON object representing the DOI.
+`,
+}, {
+	Name:  "title",
+	Short: "Show the DOI title if available.",
+	Long: `This command returns the DOI title.
+
+    rclone backend title doi: 
+
+It returns a string representing the DOI title.
+`,
+}, {
+	Name:  "provider",
+	Short: "Show the DOI provider.",
+	Long: `This command returns the DOI provider.
+
+    rclone backend provider doi: 
+
+This command can be used to update the rclone.conf file for faster operations with the doi backend
+as auto-detection for the provider can be avoided.
+
+It returns a string representing the DOI provider.
+`,
+}, {
+	Name:  "set",
+	Short: "Set command for updating the config parameters.",
+	Long: `This set command can be used to update the config parameters
+for a running doi backend.
+
+Usage Examples:
+
+    rclone backend set doi: [-o opt_name=opt_value] [-o opt_name2=opt_value2]
+    rclone rc backend/command command=set fs=doi: [-o opt_name=opt_value] [-o opt_name2=opt_value2]
+    rclone rc backend/command command=set fs=doi: -o doi=NEW_DOI
+
+The option keys are named as they are in the config file.
+
+This rebuilds the connection to the doi backend when it is called with
+the new parameters. Only new parameters need be passed as the values
+will default to those currently in use.
+
+It doesn't return anything.
+`,
+}}
+
+// Command the backend to run a named command
+//
+// The command run is name
+// args may be used to read arguments from
+// opts may be used to read optional arguments from
+//
+// The result should be capable of being JSON encoded
+// If it is a string or a []string it will be shown to the user
+// otherwise it will be JSON encoded and shown to the user like that
+func (f *Fs) Command(ctx context.Context, name string, arg []string, opt map[string]string) (out interface{}, err error) {
+	switch name {
+	case "metadata":
+		return f.ShowMetadata(ctx)
+	case "title":
+		return f.ShowTitle(ctx)
+	case "provider":
+		return string(f.provider), nil
+	case "set":
+		newOpt := f.opt
+		err := configstruct.Set(configmap.Simple(opt), &newOpt)
+		if err != nil {
+			return nil, fmt.Errorf("reading config: %w", err)
+		}
+		_, err = f.httpConnection(ctx, &newOpt)
+		if err != nil {
+			return nil, fmt.Errorf("updating session: %w", err)
+		}
+		f.opt = newOpt
+		keys := []string{}
+		for k := range opt {
+			keys = append(keys, k)
+		}
+		fs.Logf(f, "Updated config values: %s", strings.Join(keys, ", "))
+		return nil, nil
+	default:
+		return nil, fs.ErrorCommandNotFound
 	}
-	o.modTime = t
-	o.contentType = res.Header.Get("Content-Type")
-	o.size = rest.ParseSizeFromHeaders(res.Header)
+}
 
-	// // If NoSlash is set then check ContentType to see if it is a directory
-	// if o.fs.opt.NoSlash {
-	// 	mediaType, _, err := mime.ParseMediaType(o.contentType)
-	// 	if err != nil {
-	// 		return fmt.Errorf("failed to parse Content-Type: %q: %w", o.contentType, err)
-	// 	}
-	// 	if mediaType == "text/html" {
-	// 		return fs.ErrorNotAFile
-	// 	}
-	// }
-	return nil
+// ShowMetadata returns the metadata associated with the DOI
+func (f *Fs) ShowMetadata(ctx context.Context) (metadata interface{}, err error) {
+	metadataURL := f.endpoint
+	var result any
+	opts := rest.Opts{
+		Method:  "GET",
+		RootURL: metadataURL.String(),
+	}
+	err = f.pacer.Call(func() (bool, error) {
+		res, err := f.srv.CallJSON(ctx, &opts, nil, &result)
+		return shouldRetry(ctx, res, err)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// ShowTitle returns the title associated with the DOI
+func (f *Fs) ShowTitle(ctx context.Context) (title string, err error) {
+	switch f.provider {
+	case Dataverse:
+		metadata, err := f.getMetadataDataverse(ctx)
+		if err != nil {
+			return "", err
+		}
+		for _, field := range metadata.Data.LatestVersion.MetadataBlocks.Citation.Fields {
+			if strings.ToLower(field.TypeName) == "title" {
+				title, ok := field.Value.(string)
+				if ok {
+					return title, nil
+				}
+			}
+		}
+	case Invenio, Zenodo:
+		metadata, err := f.getMetadataInvenio(ctx)
+		if err != nil {
+			return "", err
+		}
+		return metadata.Metadata.Title, nil
+
+	}
+	return "<unknown title>", nil
 }
 
 // Check the interfaces are satisfied
 var (
-	_ fs.Fs = &Fs{}
-	// _ fs.PutStreamer = &Fs{}
-	_ fs.Object    = &Object{}
-	_ fs.MimeTyper = &Object{}
-	// _ fs.Commander   = &Fs{}
+	_ fs.Fs          = (*Fs)(nil)
+	_ fs.PutStreamer = (*Fs)(nil)
+	_ fs.Commander   = (*Fs)(nil)
+	_ fs.Object      = (*Object)(nil)
+	_ fs.MimeTyper   = (*Object)(nil)
 )
