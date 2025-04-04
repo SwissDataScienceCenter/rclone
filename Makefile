@@ -233,6 +233,9 @@ ifeq ($(or $(BRANCH_PATH),$(RELEASE_TAG)),)
 endif
 	@echo Beta release ready at $(BETA_URL)
 
+ci_gha:
+	go run bin/cross-compile.go $(BUILD_FLAGS) $(BUILDTAGS) $(BUILD_ARGS) $(TAG)
+
 # Fetch the binary builds from GitHub actions
 fetch_binaries:
 	rclone -P sync --exclude "/testbuilds/**" --delete-excluded $(BETA_UPLOAD) build/
