@@ -5,6 +5,7 @@ package doi
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -279,6 +280,24 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	opt.Doi = parseDoi(opt.Doi)
 
 	client := fshttp.NewClient(ctx)
+	defaultTransport := http.DefaultTransport.(*http.Transport)
+	transport := http.Transport{
+		Proxy: func(r *http.Request) (*url.URL, error) {
+			return url.Parse("http://localhost:3128")
+		},
+		DialContext:           defaultTransport.DialContext,
+		ForceAttemptHTTP2:     defaultTransport.ForceAttemptHTTP2,
+		MaxIdleConns:          defaultTransport.MaxIdleConns,
+		IdleConnTimeout:       defaultTransport.IdleConnTimeout,
+		TLSHandshakeTimeout:   defaultTransport.TLSHandshakeTimeout,
+		ExpectContinueTimeout: defaultTransport.ExpectContinueTimeout,
+	}
+	if transport.TLSClientConfig == nil {
+		transport.TLSClientConfig = &tls.Config{}
+	}
+	transport.TLSClientConfig.InsecureSkipVerify = true
+	client.Transport = &transport
+
 	ci := fs.GetConfig(ctx)
 	f := &Fs{
 		name:  name,
