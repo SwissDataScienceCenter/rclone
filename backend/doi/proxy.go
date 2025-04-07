@@ -11,18 +11,14 @@ import (
 	"net/url"
 	"os"
 
+	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/fshttp"
 )
 
-var (
-	caCertFile  = "/Users/leafty/projects/github.com/sdsc/renku-squid-cache/self.cert"
-	proxyUrlStr = "http://localhost:3128"
-)
-
-func newHttpClient(ctx context.Context) (client *http.Client, err error) {
+func newHttpClient(ctx context.Context, opt *Options) (client *http.Client, err error) {
 	client = fshttp.NewClient(ctx)
 
-	proxyUrl, err := url.Parse(proxyUrlStr)
+	proxyUrl, err := url.Parse(opt.ProxyURL)
 	if err != nil {
 		return nil, err
 	}
@@ -33,14 +29,17 @@ func newHttpClient(ctx context.Context) (client *http.Client, err error) {
 		rootCAs = x509.NewCertPool()
 	}
 
-	// Read in the self-signed certificate
-	certs, err := os.ReadFile(caCertFile)
-	if err != nil {
-		return nil, err
-	}
-
-	if ok := rootCAs.AppendCertsFromPEM(certs); !ok {
-		return nil, fmt.Errorf("could not append self-signed certificate to the CA pool")
+	if opt.ProxyCACert != "" {
+		fs.Logf(nil, "Adding to root CAs: %s", opt.ProxyCACert)
+		// Read in the self-signed certificate
+		certs, err := os.ReadFile(opt.ProxyCACert)
+		if err != nil {
+			return nil, err
+		}
+		// Add the certificate to the root CAs
+		if ok := rootCAs.AppendCertsFromPEM(certs); !ok {
+			return nil, fmt.Errorf("could not append self-signed certificate to the CA pool")
+		}
 	}
 
 	defaultTransport := http.DefaultTransport.(*http.Transport)

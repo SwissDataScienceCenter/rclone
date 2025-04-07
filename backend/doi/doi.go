@@ -19,6 +19,7 @@ import (
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/config/configstruct"
 	"github.com/rclone/rclone/fs/fserrors"
+	"github.com/rclone/rclone/fs/fshttp"
 	"github.com/rclone/rclone/fs/hash"
 	"github.com/rclone/rclone/lib/cache"
 	"github.com/rclone/rclone/lib/pacer"
@@ -72,6 +73,16 @@ The DOI provider can be set when rclone does not automatically recognize a suppo
 				}},
 			Required: false,
 			Advanced: true,
+		}, {
+			Name:     "proxy_url",
+			Help:     "Proxy URL",
+			Required: false,
+			Advanced: true,
+		}, {
+			Name:     "proxy_ca_cert",
+			Help:     "Proxy CA certificate",
+			Required: false,
+			Advanced: true,
 		}},
 	}
 	fs.Register(fsi)
@@ -91,8 +102,10 @@ const (
 
 // Options defines the configuration for this backend
 type Options struct {
-	Doi      string `config:"doi"`      // The DOI, a digital identifier of an object, usually a dataset
-	Provider string `config:"provider"` // The DOI provider
+	Doi         string `config:"doi"`      // The DOI, a digital identifier of an object, usually a dataset
+	Provider    string `config:"provider"` // The DOI provider
+	ProxyURL    string `config:"proxy_url"`
+	ProxyCACert string `config:"proxy_ca_cert"`
 }
 
 // Fs stores the interface to the remote HTTP files
@@ -277,9 +290,14 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	}
 	opt.Doi = parseDoi(opt.Doi)
 
-	client, err := newHttpClient(ctx)
-	if err != nil {
-		return nil, err
+	var client *http.Client
+	if opt.ProxyURL != "" {
+		client, err = newHttpClient(ctx, opt)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		client = fshttp.NewClient(ctx)
 	}
 
 	ci := fs.GetConfig(ctx)
