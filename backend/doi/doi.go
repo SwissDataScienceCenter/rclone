@@ -5,7 +5,6 @@ package doi
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -20,7 +19,6 @@ import (
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/config/configstruct"
 	"github.com/rclone/rclone/fs/fserrors"
-	"github.com/rclone/rclone/fs/fshttp"
 	"github.com/rclone/rclone/fs/hash"
 	"github.com/rclone/rclone/lib/cache"
 	"github.com/rclone/rclone/lib/pacer"
@@ -82,7 +80,7 @@ The DOI provider can be set when rclone does not automatically recognize a suppo
 // Provider defines the type of provider hosting the DOI
 type Provider string
 
-var (
+const (
 	// Zenodo provider, see https://zenodo.org
 	Zenodo Provider = "zenodo"
 	// Dataverse provider, see https://dataverse.harvard.edu
@@ -279,24 +277,10 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 	}
 	opt.Doi = parseDoi(opt.Doi)
 
-	client := fshttp.NewClient(ctx)
-	defaultTransport := http.DefaultTransport.(*http.Transport)
-	transport := http.Transport{
-		Proxy: func(r *http.Request) (*url.URL, error) {
-			return url.Parse("http://localhost:3128")
-		},
-		DialContext:           defaultTransport.DialContext,
-		ForceAttemptHTTP2:     defaultTransport.ForceAttemptHTTP2,
-		MaxIdleConns:          defaultTransport.MaxIdleConns,
-		IdleConnTimeout:       defaultTransport.IdleConnTimeout,
-		TLSHandshakeTimeout:   defaultTransport.TLSHandshakeTimeout,
-		ExpectContinueTimeout: defaultTransport.ExpectContinueTimeout,
+	client, err := newHttpClient(ctx)
+	if err != nil {
+		return nil, err
 	}
-	if transport.TLSClientConfig == nil {
-		transport.TLSClientConfig = &tls.Config{}
-	}
-	transport.TLSClientConfig.InsecureSkipVerify = true
-	client.Transport = &transport
 
 	ci := fs.GetConfig(ctx)
 	f := &Fs{
