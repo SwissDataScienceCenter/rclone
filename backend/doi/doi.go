@@ -145,7 +145,7 @@ func parseDoi(doi string) string {
 		return doi
 	}
 	if doiURL.Scheme == "doi" {
-		return strings.TrimLeft(strings.TrimLeft(doi, "doi:"), "/")
+		return strings.TrimLeft(strings.TrimPrefix(doi, "doi:"), "/")
 	}
 	if strings.HasSuffix(doiURL.Hostname(), "doi.org") {
 		return strings.TrimLeft(doiURL.Path, "/")
