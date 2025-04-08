@@ -159,7 +159,7 @@ func (f *Fs) listInvevioDoiFiles(ctx context.Context) (entries []*Object, err er
 			size:        file.Size,
 			modTime:     modTime,
 			contentType: file.MimeType,
-			md5:         strings.TrimLeft(file.Checksum, "md5:"),
+			md5:         strings.TrimPrefix(file.Checksum, "md5:"),
 		}
 		entries = append(entries, entry)
 	}

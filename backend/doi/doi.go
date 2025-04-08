@@ -81,7 +81,7 @@ The DOI provider can be set when rclone does not automatically recognize a suppo
 // Provider defines the type of provider hosting the DOI
 type Provider string
 
-var (
+const (
 	// Zenodo provider, see https://zenodo.org
 	Zenodo Provider = "zenodo"
 	// Dataverse provider, see https://dataverse.harvard.edu
@@ -133,7 +133,7 @@ func parseDoi(doi string) string {
 		return doi
 	}
 	if doiURL.Scheme == "doi" {
-		return strings.TrimLeft(strings.TrimLeft(doi, "doi:"), "/")
+		return strings.TrimLeft(strings.TrimPrefix(doi, "doi:"), "/")
 	}
 	if strings.HasSuffix(doiURL.Hostname(), "doi.org") {
 		return strings.TrimLeft(doiURL.Path, "/")
