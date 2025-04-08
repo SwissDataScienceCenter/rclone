@@ -9,7 +9,7 @@ var linkRegex = regexp.MustCompile(`^<(.+)>$`)
 var valueRegex = regexp.MustCompile(`^"(.+)"$`)
 
 // headerLink represents a link as presented in HTTP headers
-// MDN Reference: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/headerLink
+// MDN Reference: https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Link
 type headerLink struct {
 	Href   string
 	Rel    string
