@@ -721,16 +721,30 @@ func (c *Cache) maxSizeQuotaOK() bool {
 	return c.used <= int64(c.opt.CacheMaxSize)
 }
 
+// Check the available quota for a disk is in limits wrt. DiskSpaceTotalSize.
+//
+// must be called with mu held.
+func (c *Cache) totalSizeQuotaOK() bool {
+	if c.opt.DiskSpaceTotalSize <= 0 {
+		return true
+	}
+	var margin int64 = 0
+	if c.opt.CacheMinFreeSpace > 0 {
+		margin = int64(c.opt.CacheMinFreeSpace)
+	}
+	return (c.used + margin) <= int64(c.opt.DiskSpaceTotalSize)
+}
+
 // Check the available quotas for a disk is in limits.
 //
 // must be called with mu held.
 func (c *Cache) quotasOK() bool {
-	return c.maxSizeQuotaOK() && c.minFreeSpaceQuotaOK()
+	return c.maxSizeQuotaOK() && c.minFreeSpaceQuotaOK() && c.totalSizeQuotaOK()
 }
 
 // Return true if any quotas set
 func (c *Cache) haveQuotas() bool {
-	return c.opt.CacheMaxSize > 0 || c.opt.CacheMinFreeSpace > 0
+	return c.opt.CacheMaxSize > 0 || c.opt.CacheMinFreeSpace > 0 || c.opt.DiskSpaceTotalSize > 0
 }
 
 // Remove clean cache files that are not open until the total space
