@@ -732,6 +732,11 @@ func (c *Cache) totalSizeQuotaOK() bool {
 	if c.opt.CacheMinFreeSpace > 0 {
 		margin = int64(c.opt.CacheMinFreeSpace)
 	}
+	fs.Logf(nil, "vfs cache totalSizeQuotaOK(): used = %d, margin = %d, total = %d", c.used, margin, int64(c.opt.DiskSpaceTotalSize))
+	if (c.used + margin) > int64(c.opt.DiskSpaceTotalSize) {
+		return false
+	}
+	// TODO: can we get to use the total (c.used) for all caches here?
 	return (c.used + margin) <= int64(c.opt.DiskSpaceTotalSize)
 }
 
