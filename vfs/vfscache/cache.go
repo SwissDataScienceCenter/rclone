@@ -733,7 +733,7 @@ func (c *Cache) totalSizeQuotaOK() bool {
 	if c.opt.DiskSpaceTotalSize <= 0 {
 		return true
 	}
-	var margin int64 = 0
+	var margin int64
 	if c.opt.CacheMinFreeSpace > 0 {
 		margin = int64(c.opt.CacheMinFreeSpace)
 	}
