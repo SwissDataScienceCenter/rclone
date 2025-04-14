@@ -90,7 +90,7 @@ func newTestCacheOpt(t *testing.T, opt vfscommon.Options) (r *fstest.Run, c *Cac
 	ctx, cancel := context.WithCancel(context.Background())
 
 	avInfos = nil
-	c, err := New(ctx, r.Fremote, &opt, addVirtual)
+	c, err := New(ctx, r.Fremote, &opt, addVirtual, nil)
 	require.NoError(t, err)
 
 	t.Cleanup(func() {
