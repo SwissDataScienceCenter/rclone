@@ -737,13 +737,13 @@ func (c *Cache) totalSizeQuotaOK() bool {
 	if c.opt.CacheMinFreeSpace > 0 {
 		margin = int64(c.opt.CacheMinFreeSpace)
 	}
-	fs.Logf(nil, "vfs cache totalSizeQuotaOK(): used = %d, margin = %d, total = %d", c.used, margin, int64(c.opt.DiskSpaceTotalSize))
+	fs.Logf(c.fremote, "vfs cache totalSizeQuotaOK(): used = %d, margin = %d, total = %d", c.used, margin, int64(c.opt.DiskSpaceTotalSize))
 	if (c.used + margin) > int64(c.opt.DiskSpaceTotalSize) {
 		return false
 	}
 	if c.tuFn != nil {
 		totalUsed := c.tuFn()
-		fs.Logf(nil, "vfs cache totalSizeQuotaOK(): totalUsed = %d, margin = %d, total = %d", totalUsed, margin, int64(c.opt.DiskSpaceTotalSize))
+		fs.Logf(c.fremote, "vfs cache totalSizeQuotaOK(): totalUsed = %d, margin = %d, total = %d", totalUsed, margin, int64(c.opt.DiskSpaceTotalSize))
 		if (totalUsed + margin) > int64(c.opt.DiskSpaceTotalSize) {
 			return false
 		}
