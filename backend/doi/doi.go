@@ -596,6 +596,8 @@ func (f *Fs) Command(ctx context.Context, name string, arg []string, opt map[str
 		return f.ShowTitle(ctx)
 	case "provider":
 		return string(f.provider), nil
+	case "info":
+		return f.ShowInfo(ctx)
 	case "set":
 		newOpt := f.opt
 		err := configstruct.Set(configmap.Simple(opt), &newOpt)
@@ -661,6 +663,14 @@ func (f *Fs) ShowTitle(ctx context.Context) (title string, err error) {
 
 	}
 	return "<unknown title>", nil
+}
+
+func (f *Fs) ShowInfo(ctx context.Context) (metadata interface{}, err error) {
+	info := map[string]any{}
+	info["DOI"] = f.opt.Doi
+	info["metadataURL"] = f.endpointURL
+	info["provider"] = f.provider
+	return info, nil
 }
 
 // Check the interfaces are satisfied
