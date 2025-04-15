@@ -1,4 +1,4 @@
-// Implementation for InvenioDRM
+// Implementation for InvenioRDM
 
 package doi
 
@@ -18,13 +18,13 @@ import (
 
 var invenioRecordRegex = regexp.MustCompile(`\/records?\/(.+)`)
 
-// Returns true if resolvedURL is likely a DOI hosted on an InvenioDRM intallation
+// Returns true if resolvedURL is likely a DOI hosted on an InvenioRDM intallation
 func activateInvenio(ctx context.Context, srv *rest.Client, pacer *fs.Pacer, resolvedURL *url.URL) (isActive bool) {
 	_, _, err := resolveInvenioEndpoint(ctx, srv, pacer, resolvedURL)
 	return err == nil
 }
 
-// Resolve the main API endpoint for a DOI hosted on an InvenioDRM installation
+// Resolve the main API endpoint for a DOI hosted on an InvenioRDM installation
 func resolveInvenioEndpoint(ctx context.Context, srv *rest.Client, pacer *fs.Pacer, resolvedURL *url.URL) (provider Provider, endpoint *url.URL, err error) {
 	var res *http.Response
 	opts := rest.Opts{

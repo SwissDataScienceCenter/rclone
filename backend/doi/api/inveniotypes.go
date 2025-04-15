@@ -1,8 +1,8 @@
-// Type definitions specific to InvenioDRM
+// Type definitions specific to InvenioRDM
 
 package api
 
-// InvenioRecordResponse is the representation of a record stored in InvenioDRM
+// InvenioRecordResponse is the representation of a record stored in InvenioRDM
 type InvenioRecordResponse struct {
 	Links InvenioRecordResponseLinks `json:"links"`
 	// Metadata InvenioRecordMetadata      `json:"metadata"`
