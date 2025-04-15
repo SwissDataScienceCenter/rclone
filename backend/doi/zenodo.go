@@ -17,8 +17,6 @@ var zenodoRecordRegex = regexp.MustCompile(`zenodo[.](.+)`)
 
 // Resolve the main API endpoint for a DOI hosted on Zenodo
 func resolveZenodoEndpoint(ctx context.Context, srv *rest.Client, pacer *fs.Pacer, resolvedURL *url.URL, doi string) (provider Provider, endpoint *url.URL, err error) {
-	fs.Logf(nil, "zenodoURL = %s", resolvedURL.String())
-
 	match := zenodoRecordRegex.FindStringSubmatch(doi)
 	if match == nil {
 		return "", nil, fmt.Errorf("could not derive API endpoint URL from '%s'", resolvedURL.String())
@@ -45,6 +43,5 @@ func resolveZenodoEndpoint(ctx context.Context, srv *rest.Client, pacer *fs.Pace
 		return "", nil, err
 	}
 
-	fs.Logf(nil, "endpointURL = %s", endpointURL.String())
 	return Zenodo, endpointURL, nil
 }

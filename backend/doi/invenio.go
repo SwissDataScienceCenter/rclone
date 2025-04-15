@@ -26,8 +26,6 @@ func activateInvenio(ctx context.Context, srv *rest.Client, pacer *fs.Pacer, res
 
 // Resolve the main API endpoint for a DOI hosted on an InvenioDRM installation
 func resolveInvenioEndpoint(ctx context.Context, srv *rest.Client, pacer *fs.Pacer, resolvedURL *url.URL) (provider Provider, endpoint *url.URL, err error) {
-	fs.Logf(nil, "invenioURL = %s", resolvedURL.String())
-
 	var res *http.Response
 	opts := rest.Opts{
 		Method:  "GET",
@@ -65,7 +63,6 @@ func resolveInvenioEndpoint(ctx context.Context, srv *rest.Client, pacer *fs.Pac
 	// If there is no linkset header, try to grab the record ID from the URL
 	recordID := ""
 	resURL := res.Request.URL
-	fs.Logf(nil, "resURL = %s", resURL.String())
 	match := invenioRecordRegex.FindStringSubmatch(resURL.EscapedPath())
 	if match != nil {
 		recordID = match[1]
@@ -138,7 +135,6 @@ func (f *Fs) listInvevioDoiFiles(ctx context.Context) (entries []*Object, err er
 		Method: "GET",
 		Path:   strings.TrimLeft(filesURL.EscapedPath(), "/"),
 	}
-	fs.Logf(f, "filesAPIPath = '%s'", opts.Path)
 	err = f.pacer.Call(func() (bool, error) {
 		res, err := f.srv.CallJSON(ctx, &opts, nil, &result)
 		return shouldRetry(ctx, res, err)

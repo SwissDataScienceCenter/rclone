@@ -197,7 +197,6 @@ func resolveEndpoint(ctx context.Context, srv *rest.Client, pacer *fs.Pacer, opt
 		return resolveZenodoEndpoint(ctx, srv, pacer, resolvedURL, opt.Doi)
 	}
 
-	// TODO: improve auto-detect
 	hostname := strings.ToLower(resolvedURL.Hostname())
 	if hostname == "dataverse.harvard.edu" || activateDataverse(resolvedURL) {
 		return resolveDataverseEndpoint(resolvedURL)
@@ -293,8 +292,6 @@ func NewFs(ctx context.Context, name, root string, m configmap.Mapper) (fs.Fs, e
 		CanHaveEmptyDirectories: true,
 	}).Fill(ctx, f)
 
-	fs.Logf(f, "name = '%s', root = '%s'", name, root)
-
 	isFile, err := f.httpConnection(ctx, opt)
 	if err != nil {
 		return nil, err
@@ -361,8 +358,6 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 
 // NewObject creates a new remote http file object
 func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
-	fs.Logf(nil, "remote = %s", remote)
-
 	var entries []*Object
 	var err error
 	switch f.provider {
@@ -379,7 +374,6 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 
 	for _, entry := range entries {
 		if entry.Remote() == remote {
-			fs.Logf(nil, "Found: %s -> %s", entry.Remote(), entry.contentURL)
 			return entry, nil
 		}
 	}
@@ -477,23 +471,14 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 		RootURL: o.contentURL,
 		Options: options,
 	}
-	fs.Logf(o, "Open with URL = '%s'", o.contentURL)
-	for _, opt := range opts.Options {
-		k, v := opt.Header()
-		fs.Logf(o, "header '%s' = '%s'", k, v)
-	}
 	var res *http.Response
 	err = o.fs.pacer.Call(func() (bool, error) {
 		res, err = o.fs.srv.Call(ctx, &opts)
 		return shouldRetry(ctx, res, err)
 	})
 	if err != nil {
-		fs.Logf(o, "Open failed: '%s'", res.Status)
-		fs.Logf(o, "Open failed: '%s'", err.Error())
 		return nil, fmt.Errorf("Open failed: %w", err)
 	}
-	fs.Logf(o, "Open response: '%s'", res.Status)
-	fs.Logf(o, "Open response: '%v'", res.Header)
 
 	// Handle non-compliant redirects
 	if res.Header.Get("Location") != "" {
@@ -505,12 +490,8 @@ func (o *Object) Open(ctx context.Context, options ...fs.OpenOption) (in io.Read
 				return shouldRetry(ctx, res, err)
 			})
 			if err != nil {
-				fs.Logf(o, "Open failed: '%s'", res.Status)
-				fs.Logf(o, "Open failed: '%s'", err.Error())
 				return nil, fmt.Errorf("Open failed: %w", err)
 			}
-			fs.Logf(o, "Open response: '%s'", res.Status)
-			fs.Logf(o, "Open response: '%v'", res.Header)
 		}
 	}
 

@@ -25,18 +25,13 @@ func activateDataverse(resolvedURL *url.URL) (isActive bool) {
 
 // Resolve the main API endpoint for a DOI hosted on a Dataverse installation
 func resolveDataverseEndpoint(resolvedURL *url.URL) (provider Provider, endpoint *url.URL, err error) {
-	fs.Logf(nil, "dataverseURL = %s", resolvedURL.String())
-
 	queryValues := resolvedURL.Query()
 	persistentID := queryValues.Get("persistentId")
-
-	fs.Logf(nil, "persistentId = %s", persistentID)
 
 	query := url.Values{}
 	query.Add("persistentId", persistentID)
 	endpointURL := resolvedURL.ResolveReference(&url.URL{Path: "/api/datasets/:persistentId/", RawQuery: query.Encode()})
 
-	fs.Logf(nil, "endpointURL = %s", endpointURL)
 	return Dataverse, endpointURL, nil
 }
 
@@ -94,7 +89,6 @@ func (f *Fs) listDataverseDoiFiles(ctx context.Context) (entries []*Object, err 
 	}
 
 	filesURL := f.endpoint
-	fs.Logf(f, "filesURL = '%s'", filesURL.String())
 	var res *http.Response
 	var result api.DataverseDatasetResponse
 	opts := rest.Opts{
@@ -102,15 +96,11 @@ func (f *Fs) listDataverseDoiFiles(ctx context.Context) (entries []*Object, err 
 		Path:       strings.TrimLeft(filesURL.EscapedPath(), "/"),
 		Parameters: filesURL.Query(),
 	}
-	fs.Logf(f, "filesAPIPath = '%s?%s'", opts.Path, opts.Parameters.Encode())
 	err = f.pacer.Call(func() (bool, error) {
 		res, err = f.srv.CallJSON(ctx, &opts, nil, &result)
 		return shouldRetry(ctx, res, err)
 	})
 	if err != nil {
-		if res != nil {
-			fs.Logf(f, "%s", res.Status)
-		}
 		return nil, fmt.Errorf("readDir failed: %w", err)
 	}
 	modTime, modTimeErr := time.Parse(time.RFC3339, result.Data.LatestVersion.LastUpdateTime)
