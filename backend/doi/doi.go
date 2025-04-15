@@ -511,32 +511,11 @@ func (o *Object) MimeType(ctx context.Context) string {
 var commandHelp = []fs.CommandHelp{{
 	Name:  "metadata",
 	Short: "Show metadata about the DOI.",
-	Long: `This command returns the JSON representation of the DOI.
+	Long: `This command returns a JSON object with some information about the DOI.
 
     rclone backend medatadata doi: 
 
-It returns a JSON object representing the DOI.
-`,
-}, {
-	Name:  "title",
-	Short: "Show the DOI title if available.",
-	Long: `This command returns the DOI title.
-
-    rclone backend title doi: 
-
-It returns a string representing the DOI title.
-`,
-}, {
-	Name:  "provider",
-	Short: "Show the DOI provider.",
-	Long: `This command returns the DOI provider.
-
-    rclone backend provider doi: 
-
-This command can be used to update the rclone.conf file for faster operations with the doi backend
-as auto-detection for the provider can be avoided.
-
-It returns a string representing the DOI provider.
+It returns a JSON object representing metadata about the DOI.
 `,
 }, {
 	Name:  "set",
@@ -573,12 +552,6 @@ func (f *Fs) Command(ctx context.Context, name string, arg []string, opt map[str
 	switch name {
 	case "metadata":
 		return f.ShowMetadata(ctx)
-	case "title":
-		return f.ShowTitle(ctx)
-	case "provider":
-		return string(f.provider), nil
-	case "info":
-		return f.ShowInfo(ctx)
 	case "set":
 		newOpt := f.opt
 		err := configstruct.Set(configmap.Simple(opt), &newOpt)
@@ -601,54 +574,16 @@ func (f *Fs) Command(ctx context.Context, name string, arg []string, opt map[str
 	}
 }
 
-// ShowMetadata returns the metadata associated with the DOI
+// ShowMetadata returns some metadata about the corresponding DOI
 func (f *Fs) ShowMetadata(ctx context.Context) (metadata interface{}, err error) {
-	metadataURL := f.endpoint
-	var result any
-	opts := rest.Opts{
-		Method:  "GET",
-		RootURL: metadataURL.String(),
-	}
-	err = f.pacer.Call(func() (bool, error) {
-		res, err := f.srv.CallJSON(ctx, &opts, nil, &result)
-		return shouldRetry(ctx, res, err)
-	})
+	doiURL, err := url.Parse("https://doi.org/" + f.opt.Doi)
 	if err != nil {
 		return nil, err
 	}
-	return result, nil
-}
 
-// ShowTitle returns the title associated with the DOI
-func (f *Fs) ShowTitle(ctx context.Context) (title string, err error) {
-	switch f.provider {
-	case Dataverse:
-		metadata, err := f.getMetadataDataverse(ctx)
-		if err != nil {
-			return "", err
-		}
-		for _, field := range metadata.Data.LatestVersion.MetadataBlocks.Citation.Fields {
-			if strings.ToLower(field.TypeName) == "title" {
-				title, ok := field.Value.(string)
-				if ok {
-					return title, nil
-				}
-			}
-		}
-	case Invenio, Zenodo:
-		metadata, err := f.getMetadataInvenio(ctx)
-		if err != nil {
-			return "", err
-		}
-		return metadata.Metadata.Title, nil
-
-	}
-	return "<unknown title>", nil
-}
-
-func (f *Fs) ShowInfo(ctx context.Context) (metadata interface{}, err error) {
 	info := map[string]any{}
 	info["DOI"] = f.opt.Doi
+	info["URL"] = doiURL.String()
 	info["metadataURL"] = f.endpointURL
 	info["provider"] = f.provider
 	return info, nil
