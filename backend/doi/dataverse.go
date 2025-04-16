@@ -44,7 +44,7 @@ func (f *Fs) listDataverse(ctx context.Context, dir string) (entries fs.DirEntri
 
 	fullDir := path.Join(f.root, dir)
 	if fullDir != "" {
-		fullDir = fullDir + "/"
+		fullDir += "/"
 	}
 	dirPaths := map[string]bool{}
 	for _, entry := range fileEntries {
