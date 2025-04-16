@@ -1,2 +1,3 @@
 FROM scratch
-COPY rclone rclone
+ARG TARGETPLATFORM
+COPY ${TARGETPLATFORM}/rclone rclone

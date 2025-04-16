@@ -193,12 +193,19 @@ jobs:
       - name: List downloaded files
         run: ls -R rclone
 
-      - name: Extract rclone binary
+      - name: Extract rclone binary - amd64
         run: |
           unzip "rclone/*-amd64.zip" -d rclone-unzip
           ls -R rclone-unzip
-          mv rclone-unzip/*/rclone rclone
-          ls .
+          mkdir -p linux/amd64
+          mv rclone-unzip/*/rclone linux/amd64/rclone
+
+      - name: Extract rclone binary - arm64
+        run: |
+          unzip "rclone/*-arm64.zip" -d rclone-unzip
+          ls -R rclone-unzip
+          mkdir -p linux/arm64
+          mv rclone-unzip/*/rclone linux/arm64/rclone
 
       - name: Docker image metadata
         id: meta
@@ -234,6 +241,7 @@ jobs:
         with:
           context: .
           file: .renku/Dockerfile
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
