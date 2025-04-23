@@ -51,6 +51,7 @@ type Cache struct {
 	hashOption *fs.HashesOption     // corresponding OpenOption
 	writeback  *writeback.WriteBack // holds Items for writeback
 	avFn       AddVirtualFn         // if set, can be called to add dir entries
+	tuFn       TotalUsedFn          // if set, can be called to check quotas
 
 	mu            sync.Mutex       // protects the following variables
 	cond          sync.Cond        // cond lock for synchronous cache cleaning
@@ -72,11 +73,14 @@ type Cache struct {
 // go into the directory tree.
 type AddVirtualFn func(remote string, size int64, isDir bool) error
 
+// TotalUsedFn can be used to check if the total size of caches exceeds the allowed quota.
+type TotalUsedFn func() (size int64)
+
 // New creates a new cache hierarchy for fremote
 //
 // This starts background goroutines which can be cancelled with the
 // context passed in.
-func New(ctx context.Context, fremote fs.Fs, opt *vfscommon.Options, avFn AddVirtualFn) (*Cache, error) {
+func New(ctx context.Context, fremote fs.Fs, opt *vfscommon.Options, avFn AddVirtualFn, tuFn TotalUsedFn) (*Cache, error) {
 	// Get cache root path.
 	// We need it in two variants: OS path as an absolute path with UNC prefix,
 	// OS-specific path separators, and encoded with OS-specific encoder. Standard path
@@ -127,6 +131,7 @@ func New(ctx context.Context, fremote fs.Fs, opt *vfscommon.Options, avFn AddVir
 		hashOption: hashOption,
 		writeback:  writeback.New(ctx, opt),
 		avFn:       avFn,
+		tuFn:       tuFn,
 	}
 
 	// load in the cache and metadata off disk
@@ -739,16 +744,41 @@ func (c *Cache) maxSizeQuotaOK() bool {
 	return c.used <= int64(c.opt.CacheMaxSize)
 }
 
+// Check the available quota for a disk is in limits wrt. DiskSpaceTotalSize.
+//
+// must be called with mu held.
+func (c *Cache) totalSizeQuotaOK() bool {
+	if c.opt.DiskSpaceTotalSize <= 0 {
+		return true
+	}
+	var margin int64
+	if c.opt.CacheMinFreeSpace > 0 {
+		margin = int64(c.opt.CacheMinFreeSpace)
+	}
+	fs.Logf(c.fremote, "vfs cache totalSizeQuotaOK(): used = %d, margin = %d, total = %d", c.used, margin, int64(c.opt.DiskSpaceTotalSize))
+	if (c.used + margin) > int64(c.opt.DiskSpaceTotalSize) {
+		return false
+	}
+	if c.tuFn != nil {
+		totalUsed := c.tuFn()
+		fs.Logf(c.fremote, "vfs cache totalSizeQuotaOK(): totalUsed = %d, margin = %d, total = %d", totalUsed, margin, int64(c.opt.DiskSpaceTotalSize))
+		if (totalUsed + margin) > int64(c.opt.DiskSpaceTotalSize) {
+			return false
+		}
+	}
+	return true
+}
+
 // Check the available quotas for a disk is in limits.
 //
 // must be called with mu held.
 func (c *Cache) quotasOK() bool {
-	return c.maxSizeQuotaOK() && c.minFreeSpaceQuotaOK()
+	return c.maxSizeQuotaOK() && c.minFreeSpaceQuotaOK() && c.totalSizeQuotaOK()
 }
 
 // Return true if any quotas set
 func (c *Cache) haveQuotas() bool {
-	return c.opt.CacheMaxSize > 0 || c.opt.CacheMinFreeSpace > 0
+	return c.opt.CacheMaxSize > 0 || c.opt.CacheMinFreeSpace > 0 || c.opt.DiskSpaceTotalSize > 0
 }
 
 // Remove clean cache files that are not open until the total space
@@ -898,4 +928,9 @@ func (c *Cache) AddVirtual(remote string, size int64, isDir bool) error {
 		return errors.New("no AddVirtual function registered")
 	}
 	return c.avFn(remote, size, isDir)
+}
+
+// Used returns the current bytes used by this cache
+func (c *Cache) Used() (size int64) {
+	return c.used
 }
