@@ -18,7 +18,7 @@ jobs:
       fail-fast: false
       matrix:
         # job_name: ['linux', 'linux_386', 'mac_amd64', 'mac_arm64', 'windows', 'other_os']
-        job_name: 'linux'
+        job_name: ['linux']
 
         include:
           - job_name: linux
