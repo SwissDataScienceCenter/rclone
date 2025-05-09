@@ -21,7 +21,21 @@ jobs:
   build:
     timeout-minutes: 60
     env:
-      os: ${{ inputs.job_name == 'mac_amd64' && 'macos-latest' || 'ubuntu-24.04' }}
+      os: ${{ inputs.job_name == 'mac_amd64' && 'macos-latest'
+        || inputs.job_name == 'mac_arm64' && 'macos-latest'
+        || inputs.job_name == 'windows' && 'windows-latest'
+        || 'ubuntu-24.04' }}
+      go: '>=1.23.0-rc.1'
+      gotags: ${{ inputs.job_name == 'other_os' && '' || 'cmount' }}
+      cgo: ${{ inputs.job_name == 'windows' && '0' || '' }}
+      build_flags: ${{ inputs.job_name == 'linux' && '-include "^linux/"'
+        || inputs.job_name == 'mac_amd64' && '-include "^darwin/amd64" -cgo'
+        || inputs.job_name == 'mac_arm64' && '-include "^darwin/arm64" -cgo -macos-arch arm64 -cgo-cflags=-I/usr/local/include -cgo-ldflags=-L/usr/local/lib'
+        || inputs.job_name == 'windows' && '-include "^windows/"'
+        || inputs.job_name == 'other_os' && '-exclude "^(windows/|darwin/|linux/)"'
+        || '' }}
+      build_args: ${{ inputs.job_name == 'windows' && '-buildmode exe' || '' }}
+      deploy: ${{ inputs.job_name != 'linux_386' }}
 
     # strategy:
     #   fail-fast: false
@@ -96,117 +110,113 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Print GH env
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.go }}
+          check-latest: true
+
+      - name: Set environment variables
         shell: bash
-        run: env
+        run: |
+          echo 'GOTAGS=${{ env.gotags }}' >> $GITHUB_ENV
+          echo 'BUILD_FLAGS=${{ env.build_flags }}' >> $GITHUB_ENV
+          echo 'BUILD_ARGS=${{ env.build_args }}' >> $GITHUB_ENV
+          if [[ "${{ env.goarch }}" != "" ]]; then echo 'GOARCH=${{ env.goarch }}' >> $GITHUB_ENV ; fi
+          if [[ "${{ env.cgo }}" != "" ]]; then echo 'CGO_ENABLED=${{ env.cgo }}' >> $GITHUB_ENV ; fi
 
-      # - name: Install Go
-      #   uses: actions/setup-go@v5
-      #   with:
-      #     go-version: ${{ matrix.go }}
-      #     check-latest: true
+      - name: Install Libraries on Linux
+        shell: bash
+        run: |
+          sudo modprobe fuse
+          sudo chmod 666 /dev/fuse
+          sudo chown root:$USER /etc/fuse.conf
+          sudo apt-get update
+          sudo apt-get install -y fuse3 libfuse-dev rpm pkg-config git-annex git-annex-remote-rclone nfs-common
+        if: env.os == 'ubuntu-latest'
 
-      # - name: Set environment variables
-      #   shell: bash
-      #   run: |
-      #     echo 'GOTAGS=${{ matrix.gotags }}' >> $GITHUB_ENV
-      #     echo 'BUILD_FLAGS=${{ matrix.build_flags }}' >> $GITHUB_ENV
-      #     echo 'BUILD_ARGS=${{ matrix.build_args }}' >> $GITHUB_ENV
-      #     if [[ "${{ matrix.goarch }}" != "" ]]; then echo 'GOARCH=${{ matrix.goarch }}' >> $GITHUB_ENV ; fi
-      #     if [[ "${{ matrix.cgo }}" != "" ]]; then echo 'CGO_ENABLED=${{ matrix.cgo }}' >> $GITHUB_ENV ; fi
+      - name: Install Libraries on macOS
+        shell: bash
+        run: |
+          # https://github.com/Homebrew/brew/issues/15621#issuecomment-1619266788
+          # https://github.com/orgs/Homebrew/discussions/4612#discussioncomment-6319008
+          unset HOMEBREW_NO_INSTALL_FROM_API
+          brew untap --force homebrew/core
+          brew untap --force homebrew/cask
+          brew update
+          brew install --cask macfuse
+          brew install git-annex git-annex-remote-rclone
+        if: env.os == 'macos-latest'
 
-      # - name: Install Libraries on Linux
-      #   shell: bash
-      #   run: |
-      #     sudo modprobe fuse
-      #     sudo chmod 666 /dev/fuse
-      #     sudo chown root:$USER /etc/fuse.conf
-      #     sudo apt-get update
-      #     sudo apt-get install -y fuse3 libfuse-dev rpm pkg-config git-annex git-annex-remote-rclone nfs-common
-      #   if: matrix.os == 'ubuntu-latest' && matrix.run
+      - name: Install Libraries on Windows
+        shell: powershell
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          choco install -y winfsp zip
+          echo "CPATH=C:\Program Files\WinFsp\inc\fuse;C:\Program Files (x86)\WinFsp\inc\fuse" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          if ($env:GOARCH -eq "386") {
+            choco install -y mingw --forcex86 --force
+            echo "C:\\ProgramData\\chocolatey\\lib\\mingw\\tools\\install\\mingw32\\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          }
+          # Copy mingw32-make.exe to make.exe so the same command line
+          # can be used on Windows as on macOS and Linux
+          $path = (get-command mingw32-make.exe).Path
+          Copy-Item -Path $path -Destination (Join-Path (Split-Path -Path $path) 'make.exe')
+        if: env.os == 'windows-latest'
 
-      # - name: Install Libraries on macOS
-      #   shell: bash
-      #   run: |
-      #     # https://github.com/Homebrew/brew/issues/15621#issuecomment-1619266788
-      #     # https://github.com/orgs/Homebrew/discussions/4612#discussioncomment-6319008
-      #     unset HOMEBREW_NO_INSTALL_FROM_API
-      #     brew untap --force homebrew/core
-      #     brew untap --force homebrew/cask
-      #     brew update
-      #     brew install --cask macfuse
-      #     brew install git-annex git-annex-remote-rclone
-      #   if: matrix.os == 'macos-latest' && matrix.run
+      - name: Print Go version and environment
+        shell: bash
+        run: |
+          printf "Using go at: $(which go)\n"
+          printf "Go version: $(go version)\n"
+          printf "\n\nGo environment:\n\n"
+          go env
+          printf "\n\nRclone environment:\n\n"
+          make vars
+          printf "\n\nSystem environment:\n\n"
+          env
 
-      # - name: Install Libraries on Windows
-      #   shell: powershell
-      #   run: |
-      #     $ProgressPreference = 'SilentlyContinue'
-      #     choco install -y winfsp zip
-      #     echo "CPATH=C:\Program Files\WinFsp\inc\fuse;C:\Program Files (x86)\WinFsp\inc\fuse" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-      #     if ($env:GOARCH -eq "386") {
-      #       choco install -y mingw --forcex86 --force
-      #       echo "C:\\ProgramData\\chocolatey\\lib\\mingw\\tools\\install\\mingw32\\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-      #     }
-      #     # Copy mingw32-make.exe to make.exe so the same command line
-      #     # can be used on Windows as on macOS and Linux
-      #     $path = (get-command mingw32-make.exe).Path
-      #     Copy-Item -Path $path -Destination (Join-Path (Split-Path -Path $path) 'make.exe')
-      #   if: matrix.os == 'windows-latest' && matrix.run
+      - name: Build rclone
+        shell: bash
+        run: |
+          make
 
-      # - name: Print Go version and environment
-      #   shell: bash
-      #   run: |
-      #     printf "Using go at: $(which go)\n"
-      #     printf "Go version: $(go version)\n"
-      #     printf "\n\nGo environment:\n\n"
-      #     go env
-      #     printf "\n\nRclone environment:\n\n"
-      #     make vars
-      #     printf "\n\nSystem environment:\n\n"
-      #     env
+      - name: Rclone version
+        shell: bash
+        run: |
+          rclone version
 
-      # - name: Build rclone
-      #   shell: bash
-      #   run: |
-      #     make
+      - name: Run tests
+        shell: bash
+        run: |
+          make quicktest
+        if: env.quicktest
 
-      # - name: Rclone version
-      #   shell: bash
-      #   run: |
-      #     rclone version
+      - name: Race test
+        shell: bash
+        run: |
+          make racequicktest
+        if: env.racequicktest
 
-      # - name: Run tests
-      #   shell: bash
-      #   run: |
-      #     make quicktest
-      #   if: matrix.quicktest
+      - name: Run librclone tests
+        shell: bash
+        run: |
+          make -C librclone/ctest test
+          make -C librclone/ctest clean
+          librclone/python/test_rclone.py
+        if: env.librclonetest
 
-      # - name: Race test
-      #   shell: bash
-      #   run: |
-      #     make racequicktest
-      #   if: matrix.racequicktest
+      - name: Compile all architectures test
+        shell: bash
+        run: |
+          make
+          make compile_all
+        if: env.compile_all
 
-      # - name: Run librclone tests
-      #   shell: bash
-      #   run: |
-      #     make -C librclone/ctest test
-      #     make -C librclone/ctest clean
-      #     librclone/python/test_rclone.py
-      #   if: matrix.librclonetest
-
-      # - name: Compile all architectures test
-      #   shell: bash
-      #   run: |
-      #     make
-      #     make compile_all
-      #   if: matrix.compile_all
-
-      # - name: Upload artifacts to GitHub
-      #   uses: actions/upload-artifact@v4
-      #   with:
-      #     name: build-${{ matrix.job_name }}
-      #     path: build
-      #     retention-days: 1
-      #   if: matrix.deploy
+      - name: Upload artifacts to GitHub
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-${{ env.job_name }}
+          path: build
+          retention-days: 1
+        if: env.deploy
