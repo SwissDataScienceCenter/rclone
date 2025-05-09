@@ -2,6 +2,7 @@ name: Build rclone for Renku (Manual run)
 
 # Trigger the workflow on push or pull request
 on:
+  push:
   workflow_dispatch:
     inputs:
       job_name:
