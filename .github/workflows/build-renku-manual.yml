@@ -86,9 +86,9 @@ jobs:
     #         deploy: true
     #         run: ${{ inputs.job == 'other_os' }}
 
-    name: ${{ inputs.job_name }}
+    name: ${{ inputs.job_name || 'default' }}
 
-    runs-on: ${{ env.os }}
+    runs-on: ${{ inputs.job_name == 'mac_amd64' && 'macos-latest' || 'ubuntu-24.04' }}
 
     steps:
       - name: Checkout
@@ -98,8 +98,7 @@ jobs:
 
       - name: Print GH env
         shell: bash
-        run: |
-          echo ${{ env.os }}
+        run: env
 
       # - name: Install Go
       #   uses: actions/setup-go@v5
