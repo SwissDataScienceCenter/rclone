@@ -3,9 +3,6 @@ name: Build rclone release for Renku
 # Trigger the workflow on tag pushes or manually
 on:
   push:
-    # TODO: only run on tags
-    branches:
-      - '**'
     tags:
       - '**'
   workflow_dispatch:
