@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/rclone/rclone/backend/doi/api"
+	"github.com/rclone/rclone/fs"
 	"github.com/rclone/rclone/fs/config/configmap"
 	"github.com/rclone/rclone/fs/hash"
 	"github.com/stretchr/testify/assert"
@@ -136,7 +137,7 @@ func prepareMockZenodoServer(t *testing.T, files map[string]string) *httptest.Se
 					Checksum: md5Sum(contents),
 					Size:     int64(len(contents)),
 					Updated:  time.Now().UTC().Format(time.RFC3339),
-					MimeType: "text/plain",
+					MimeType: "text/plain; charset=utf-8",
 					Links: api.InvenioFilesResponseEntryLinks{
 						Content: filesBaseURL.JoinPath(filename).String(),
 					},
@@ -197,11 +198,11 @@ func TestZenodoRemote(t *testing.T) {
 		"provider":             "zenodo",
 		"doi_resolver_api_url": doiResolverApiUrl,
 	}
-	fs, err := NewFs(context.Background(), remoteName, "", testConfig)
+	f, err := NewFs(context.Background(), remoteName, "", testConfig)
 	require.NoError(t, err)
 
 	// Test listing the DOI files
-	entries, err := fs.List(context.Background(), "")
+	entries, err := f.List(context.Background(), "")
 	require.NoError(t, err)
 
 	sort.Sort(entries)
@@ -221,7 +222,7 @@ func TestZenodoRemote(t *testing.T) {
 	assert.True(t, ok)
 
 	// Test reading the DOI files
-	o, err := fs.NewObject(context.Background(), "README.md")
+	o, err := f.NewObject(context.Background(), "README.md")
 	require.NoError(t, err)
 	assert.Equal(t, int64(18), o.Size())
 	md5Hash, err := o.Hash(context.Background(), hash.MD5)
@@ -233,8 +234,11 @@ func TestZenodoRemote(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, fd.Close())
 	assert.Equal(t, []byte(files["README.md"]), data)
+	do, ok := o.(fs.MimeTyper)
+	require.True(t, ok)
+	assert.Equal(t, "text/plain; charset=utf-8", do.MimeType(context.Background()))
 
-	o, err = fs.NewObject(context.Background(), "data.txt")
+	o, err = f.NewObject(context.Background(), "data.txt")
 	require.NoError(t, err)
 	assert.Equal(t, int64(9), o.Size())
 	md5Hash, err = o.Hash(context.Background(), hash.MD5)
@@ -246,4 +250,7 @@ func TestZenodoRemote(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, fd.Close())
 	assert.Equal(t, []byte(files["data.txt"]), data)
+	do, ok = o.(fs.MimeTyper)
+	require.True(t, ok)
+	assert.Equal(t, "text/plain; charset=utf-8", do.MimeType(context.Background()))
 }
