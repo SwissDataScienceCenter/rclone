@@ -73,6 +73,15 @@ The DOI provider can be set when rclone does not automatically recognize a suppo
 				}},
 			Required: false,
 			Advanced: true,
+		}, {
+			Name: "doi_resolver_api_url",
+			Help: `The URL of the DOI resolver API to use.
+
+The DOI resolver can be set for testing or for cases when the the canonical DOI resolver API cannot be used.
+
+Defaults to "https://doi.org/api".`,
+			Required: false,
+			Advanced: true,
 		}},
 	}
 	fs.Register(fsi)
@@ -92,8 +101,9 @@ const (
 
 // Options defines the configuration for this backend
 type Options struct {
-	Doi      string `config:"doi"`      // The DOI, a digital identifier of an object, usually a dataset
-	Provider string `config:"provider"` // The DOI provider
+	Doi               string `config:"doi"`                  // The DOI, a digital identifier of an object, usually a dataset
+	Provider          string `config:"provider"`             // The DOI provider
+	DoiResolverAPIURL string `config:"doi_resolver_api_url"` // The URL of the DOI resolver API to use.
 }
 
 // Fs stores the interface to the remote HTTP files
@@ -144,12 +154,17 @@ func parseDoi(doi string) string {
 // Resolve a DOI to a URL
 // Reference: https://www.doi.org/the-identifier/resources/factsheets/doi-resolution-documentation
 func resolveDoiURL(ctx context.Context, srv *rest.Client, pacer *fs.Pacer, opt *Options) (doiURL *url.URL, err error) {
+	resolverURL := opt.DoiResolverAPIURL
+	if resolverURL == "" {
+		resolverURL = doiResolverAPIURL
+	}
+
 	var result api.DoiResolverResponse
 	params := url.Values{}
 	params.Add("index", "1")
 	opts := rest.Opts{
 		Method:     "GET",
-		RootURL:    doiResolverAPIURL,
+		RootURL:    resolverURL,
 		Path:       "/handles/" + opt.Doi,
 		Parameters: params,
 	}
