@@ -52,7 +52,7 @@ func TestParseDoi(t *testing.T) {
 }
 
 // prepareMockDoiResolverServer prepares a test server to resolve DOIs
-func prepareMockDoiResolverServer(t *testing.T, resolvedURL string) (doiResolverApiUrl string) {
+func prepareMockDoiResolverServer(t *testing.T, resolvedURL string) (doiResolverAPIURL string) {
 	mux := http.NewServeMux()
 
 	// Handle requests for resolving DOIs
@@ -81,7 +81,8 @@ func prepareMockDoiResolverServer(t *testing.T, resolvedURL string) (doiResolver
 		resultBytes, err := json.Marshal(result)
 		require.NoError(t, err)
 		w.Header().Add("Content-Type", "application/json")
-		w.Write(resultBytes)
+		_, err = w.Write(resultBytes)
+		require.NoError(t, err)
 	})
 
 	// Make the test server
@@ -120,7 +121,8 @@ func prepareMockZenodoServer(t *testing.T, files map[string]string) *httptest.Se
 		resultBytes, err := json.Marshal(result)
 		require.NoError(t, err)
 		w.Header().Add("Content-Type", "application/json")
-		w.Write(resultBytes)
+		_, err = w.Write(resultBytes)
+		require.NoError(t, err)
 	})
 	// Handle requests for listing files in a record
 	mux.HandleFunc("GET /api/records/{record}/files", func(w http.ResponseWriter, r *http.Request) {
@@ -151,7 +153,8 @@ func prepareMockZenodoServer(t *testing.T, files map[string]string) *httptest.Se
 		resultBytes, err := json.Marshal(result)
 		require.NoError(t, err)
 		w.Header().Add("Content-Type", "application/json")
-		w.Write(resultBytes)
+		_, err = w.Write(resultBytes)
+		require.NoError(t, err)
 	})
 	// Handle requests for file contents
 	mux.HandleFunc("/api/files/{file}", func(w http.ResponseWriter, r *http.Request) {
@@ -165,7 +168,8 @@ func prepareMockZenodoServer(t *testing.T, files map[string]string) *httptest.Se
 		}
 
 		// Return the most basic response
-		w.Write([]byte(contents))
+		_, err := w.Write([]byte(contents))
+		require.NoError(t, err)
 	})
 
 	// Make the test server
@@ -190,13 +194,13 @@ func TestZenodoRemote(t *testing.T) {
 	ts := prepareMockZenodoServer(t, files)
 	resolvedURL := ts.URL + "/record/" + recordID
 
-	doiResolverApiUrl := prepareMockDoiResolverServer(t, resolvedURL)
+	doiResolverAPIURL := prepareMockDoiResolverServer(t, resolvedURL)
 
 	testConfig := configmap.Simple{
 		"type":                 "doi",
 		"doi":                  doi,
 		"provider":             "zenodo",
-		"doi_resolver_api_url": doiResolverApiUrl,
+		"doi_resolver_api_url": doiResolverAPIURL,
 	}
 	f, err := NewFs(context.Background(), remoteName, "", testConfig)
 	require.NoError(t, err)
