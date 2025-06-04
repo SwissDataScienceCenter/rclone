@@ -111,6 +111,7 @@ type Fs struct {
 	name        string         // name of this remote
 	root        string         // the path we are working on
 	provider    Provider       // the DOI provider
+	doiProvider doiProvider    // the interface used to interact with the DOI provider
 	features    *fs.Features   // optional features
 	opt         Options        // options for this backend
 	ci          *fs.ConfigInfo // global config
@@ -130,6 +131,16 @@ type Object struct {
 	modTime     time.Time // modification time of the object
 	contentType string    // content type of the object
 	md5         string    // MD5 hash of the object content
+}
+
+// doiProvider is the interface used to list objects in a DOI
+type doiProvider interface {
+	// CanHaveSubDirs is true when the remote can have subdirectories
+	CanHaveSubDirs() bool
+	// IsFile returns true if remote is a file
+	IsFile(ctx context.Context, remote string) (isFile bool, err error)
+	// ListEntries returns the full list of entries found at the remote, regardless of root
+	ListEntries(ctx context.Context) (entries []*Object, err error)
 }
 
 // Parse the input string as a DOI
@@ -240,24 +251,17 @@ func (f *Fs) httpConnection(ctx context.Context, opt *Options) (isFile bool, err
 	f.provider = provider
 	f.opt.Provider = string(provider)
 
-	// Determine if the root is a file
 	switch f.provider {
 	case Dataverse:
-		entries, err := f.listDataverseDoiFiles(ctx)
-		if err != nil {
-			return false, err
-		}
-		for _, entry := range entries {
-			if entry.remote == f.root {
-				isFile = true
-				break
-			}
-		}
+		f.doiProvider = newDataverseProvider(f)
 	case Invenio, Zenodo:
-		isFile = f.root != ""
+		f.doiProvider = newInvenioProvider(f)
+	default:
+		return false, fmt.Errorf("provider type '%s' not supported", f.provider)
 	}
 
-	return isFile, nil
+	// Determine if the root is a file
+	return f.doiProvider.IsFile(ctx, f.root)
 }
 
 // retryErrorCodes is a slice of error codes that we will retry
@@ -270,8 +274,8 @@ var retryErrorCodes = []int{
 	509, // Bandwidth Limit Exceeded
 }
 
-// shouldRetry returns a boolean as to whether this resp and err
-// deserve to be retried.  It returns the err as a convenience
+// shouldRetry returns a boolean as to whether this res and err
+// deserve to be retried. It returns the err as a convenience.
 func shouldRetry(ctx context.Context, res *http.Response, err error) (bool, error) {
 	if fserrors.ContextError(ctx, &err) {
 		return false, err
@@ -373,16 +377,7 @@ func (f *Fs) Rmdir(ctx context.Context, dir string) error {
 
 // NewObject creates a new remote http file object
 func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
-	var entries []*Object
-	var err error
-	switch f.provider {
-	case Dataverse:
-		entries, err = f.listDataverseDoiFiles(ctx)
-	case Invenio, Zenodo:
-		entries, err = f.listInvevioDoiFiles(ctx)
-	default:
-		err = fmt.Errorf("provider type '%s' not supported", f.provider)
-	}
+	entries, err := f.doiProvider.ListEntries(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -406,14 +401,59 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 // This should return ErrDirNotFound if the directory isn't
 // found.
 func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err error) {
-	switch f.provider {
-	case Dataverse:
-		return f.listDataverse(ctx, dir)
-	case Invenio, Zenodo:
-		return f.listInvenio(ctx, dir)
-	default:
-		return nil, fmt.Errorf("provider type '%s' not supported", f.provider)
+	if f.doiProvider.CanHaveSubDirs() {
+		fileEntries, err := f.doiProvider.ListEntries(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("error listing %q: %w", dir, err)
+		}
+
+		fullDir := path.Join(f.root, dir)
+		if fullDir != "" {
+			fullDir += "/"
+		}
+		dirPaths := map[string]bool{}
+		for _, entry := range fileEntries {
+			// First, filter out files not in `fullDir`
+			if !strings.HasPrefix(entry.remote, fullDir) {
+				continue
+			}
+			// Then, find entries in subfolers
+			remotePath := entry.remote
+			if fullDir != "" {
+				remotePath = strings.TrimLeft(strings.TrimPrefix(remotePath, fullDir), "/")
+			}
+			parts := strings.SplitN(remotePath, "/", 2)
+			if len(parts) == 1 {
+				newEntry := *entry
+				newEntry.remote = path.Join(dir, remotePath)
+				entries = append(entries, &newEntry)
+			} else {
+				dirPaths[path.Join(dir, parts[0])] = true
+			}
+		}
+		for dirPath := range dirPaths {
+			entry := fs.NewDir(dirPath, time.Time{})
+			entries = append(entries, entry)
+		}
+		return entries, nil
 	}
+
+	if !f.doiProvider.CanHaveSubDirs() {
+		if dir != "" {
+			return nil, fs.ErrorDirNotFound
+		}
+
+		fileEntries, err := f.doiProvider.ListEntries(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("error listing %q: %w", dir, err)
+		}
+		for _, entry := range fileEntries {
+			entries = append(entries, entry)
+		}
+		return entries, nil
+	}
+
+	return nil, fmt.Errorf("provider type '%s' not supported", f.provider)
 }
 
 // Put in to the remote path with the modTime given of the given size
