@@ -401,12 +401,20 @@ func (f *Fs) NewObject(ctx context.Context, remote string) (fs.Object, error) {
 // This should return ErrDirNotFound if the directory isn't
 // found.
 func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err error) {
-	if f.doiProvider.CanHaveSubDirs() {
-		fileEntries, err := f.doiProvider.ListEntries(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("error listing %q: %w", dir, err)
-		}
+	if !f.doiProvider.CanHaveSubDirs() && dir != "" {
+		return nil, fs.ErrorDirNotFound
+	}
 
+	fileEntries, err := f.doiProvider.ListEntries(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error listing %q: %w", dir, err)
+	}
+
+	if !f.doiProvider.CanHaveSubDirs() {
+		for _, entry := range fileEntries {
+			entries = append(entries, entry)
+		}
+	} else {
 		fullDir := path.Join(f.root, dir)
 		if fullDir != "" {
 			fullDir += "/"
@@ -435,25 +443,9 @@ func (f *Fs) List(ctx context.Context, dir string) (entries fs.DirEntries, err e
 			entry := fs.NewDir(dirPath, time.Time{})
 			entries = append(entries, entry)
 		}
-		return entries, nil
 	}
 
-	if !f.doiProvider.CanHaveSubDirs() {
-		if dir != "" {
-			return nil, fs.ErrorDirNotFound
-		}
-
-		fileEntries, err := f.doiProvider.ListEntries(ctx)
-		if err != nil {
-			return nil, fmt.Errorf("error listing %q: %w", dir, err)
-		}
-		for _, entry := range fileEntries {
-			entries = append(entries, entry)
-		}
-		return entries, nil
-	}
-
-	return nil, fmt.Errorf("provider type '%s' not supported", f.provider)
+	return entries, nil
 }
 
 // Put in to the remote path with the modTime given of the given size
